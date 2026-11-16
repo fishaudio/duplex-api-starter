@@ -41,6 +41,27 @@ npm start
 
 Then open [localhost:8080](http://localhost:8080).
 
+## Voice selection
+
+The demo defaults to **Clara**. Use the **Voice** dropdown for a preset, or choose **Custom…** to enter a Fish Voice Library reference ID. An empty custom ID uses the service default. Voice selection applies to the next call.
+
+The presets use Voice Library counterparts of the Live 3 voices. The Duplex handshake sends `voice.reference_id` with the ID below, not the voice name. Set `fish_realtime.reference_id` in `config.toml` to change the startup selection; an omitted setting uses Clara, while an explicit empty string uses the service default.
+
+| Voice | Reference ID |
+| --- | --- |
+| Clara | `1c8ce946e6c847e6a3b32a88cce2a1e4` |
+| Nora | `ea43bb2019214265a675f69fe4bcc14e` |
+| Owen | `a47bfeff3bc1493cb92a04c8fe4eb762` |
+| Marco | `b905eff67d954eb7bbe0754e6e62b3ea` |
+| Milo | `f022291776c7474eb71403c454142ba6` |
+| Jonah | `c2bc3b0c9c7943f3a49e5b7cdb730792` |
+| Harper | `95df3b76803249da8b36795a55e9a535` |
+| Patricia | `c4e84d4cd97b4153bcd78560460f1c61` |
+| Maddie | `90f9c20fa030430c85ddf3b6608ed1ad` |
+| Ethan | `283c705d24334216964ff9ec67c6b987` |
+| Tyler | `6b352181d9064977b3ec46de5cf01b39` |
+| Brianna | `d50f7dccfb994c238f639be665dc325b` |
+
 ## What the demo includes
 
 - A menu and live order screen with quantities, modifiers, and totals.

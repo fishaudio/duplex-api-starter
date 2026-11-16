@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { parse as parseToml } from "smol-toml";
 import type { AuthScheme, ConfigValidation } from "../shared/types.ts";
+import { DEFAULT_VOICE_REFERENCE_ID } from "../shared/voices.ts";
 
 export interface AppConfig {
   server: {
@@ -35,7 +36,7 @@ const DEFAULT_CONFIG: AppConfig = {
     token: "",
     username: "",
     password: "",
-    reference_id: "",
+    reference_id: DEFAULT_VOICE_REFERENCE_ID,
   },
   vertex_ai: {
     credentials_path: "",
@@ -104,7 +105,7 @@ export function loadAndValidateConfig(overridePath?: string): {
       token: String(fr.token ?? "").trim(),
       username: String(fr.username ?? "").trim(),
       password: String(fr.password ?? "").trim(),
-      reference_id: String(fr.reference_id ?? "").trim(),
+      reference_id: String(fr.reference_id ?? DEFAULT_VOICE_REFERENCE_ID).trim(),
     },
     vertex_ai: {
       credentials_path: String(vx.credentials_path ?? "").trim(),

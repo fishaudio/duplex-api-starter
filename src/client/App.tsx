@@ -8,6 +8,8 @@ import type {
   OrderSnapshot,
 } from "../shared/types";
 import { useAudioRig } from "./useAudioRig";
+import { VoicePicker } from "./VoicePicker";
+import { DEFAULT_VOICE_REFERENCE_ID } from "../shared/voices";
 
 type FilterTab = "all" | "turns" | "replies" | "llm" | "tools" | "transcript";
 
@@ -32,7 +34,7 @@ export function App() {
   const [showConfigModal, setShowConfigModal] = useState<boolean>(false);
   const [showEndpointDrawer, setShowEndpointDrawer] = useState<boolean>(false);
 
-  const [referenceId, setReferenceId] = useState<string>("");
+  const [referenceId, setReferenceId] = useState<string>(DEFAULT_VOICE_REFERENCE_ID);
   const [geminiModel, setGeminiModel] = useState<string>("gemini-3.8-flash");
   const [geminiTier, setGeminiTier] = useState<"priority" | "normal">("priority");
   const [sampleRate, setSampleRate] = useState<number>(24000);
@@ -348,16 +350,7 @@ default_tier = "priority"`}</pre>
             </select>
           </div>
 
-          <div className="field">
-            <label>Voice Reference ID (Fish Library)</label>
-            <input
-              type="text"
-              value={referenceId}
-              onChange={(e) => setReferenceId(e.target.value)}
-              placeholder="Default voice (or reference_id)"
-              disabled={callLive}
-            />
-          </div>
+          <VoicePicker value={referenceId} onChange={setReferenceId} disabled={callLive} />
 
           <div className="field">
             <label>Gemini Model</label>
