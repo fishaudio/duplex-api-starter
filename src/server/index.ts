@@ -177,12 +177,14 @@ export async function createStarterServer(configOverridePath?: string): Promise<
       }
     };
 
-    const stopActiveCall = () => {
+    const stopActiveCall = (notifyClient = true) => {
       if (rtClient) {
         rtClient.close();
         rtClient = null;
       }
-      sendJson({ kind: "call_state", live: false });
+      if (notifyClient) {
+        sendJson({ kind: "call_state", live: false });
+      }
     };
 
     // Initial order snapshot
@@ -201,7 +203,9 @@ export async function createStarterServer(configOverridePath?: string): Promise<
       const ctype = String(cmd.type ?? "");
 
       if (ctype === "call.start") {
-        stopActiveCall();
+        // Close any previous upstream socket silently without telling browser `live: false`
+        // (telling browser `live: false` here would tear down the AudioContext it just opened!)
+        stopActiveCall(false);
         const { config, validation } = loadAndValidateConfig(configOverridePath);
 
         // Allow optional runtime endpoint/auth overrides from UI; fall back to config.toml
