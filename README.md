@@ -1,8 +1,10 @@
 # Fish Audio Realtime Voice Agent Starter (Full-Stack TypeScript)
 
+For a nontechnical introduction and a short demo script, see the [sales guide](docs/sales-guide.md). The guide is published ahead of the refreshed demo code.
+
 A clean, zero-native-dependency **Full-Stack TypeScript (Node.js + React 19 + Vite)** reference application demonstrating how to build a full-duplex, interruptible voice agent with **Fish Audio Realtime (`/v1/realtime/converse`)**, **speculative eager turns**, **tool calling**, and **backend ambience mixing**.
 
-Out of the box, it runs an interactive **McDonald's Drive-Thru** scenario where callers order aloud over realistic kitchen & speaker-post ambience while watching every protocol frame, Gemini hop, and tool call stream live.
+Out of the box, it runs an interactive **drive-thru ordering** scenario where callers order aloud over realistic kitchen & speaker-post ambience while watching every protocol frame, Gemini hop, and tool call stream live.
 
 ---
 
@@ -37,9 +39,9 @@ Open **http://localhost:5173** (or run `npm run build && npm start` for single-p
 
 | Best Practice | File | Why It Matters |
 | --- | --- | --- |
-| **Eager-First Turn Taking + Write-Tool Commit Gate** | `src/server/brain.ts` | Starts LLM streaming on `turn.eager` (`for=eager_id`) so Fish pre-synthesizes speech with ~0 ms onset wait; parks mutating tools at `commitGate` until `turn.committed` approves `eager_id` so discarded pauses never create phantom orders. |
-| **Binary MessagePack + 20 ms Audio Clock** | `src/server/fishRealtime.ts` | Immediate `session.start`, `session.started` gating, and a 20 ms `pcm_s16le` pump that pads silence so calls never drift or hit `4408 idle_timeout`. Supports both `Bearer` and `Basic` auth. |
-| **Zero-Dead-Air Tool Speech (`say` + `flush`)** | `src/server/brain.ts` + `src/server/driveThru.ts` | Flushes a short spoken filler (`"Got it, adding that now."`, `flush: true`) before running tools, then streams Hop 2 on the same `reply_id`. |
+| **Eager-First Turn Taking + Write-Tool Commit Gate** | `src/server/brain.ts` | Starts LLM streaming on `turn.eager` (`for=eager_id`) so Fish can prepare speech before the turn is committed; parks mutating tools at `commitGate` until `turn.committed` approves `eager_id` so discarded pauses never create phantom orders. |
+| **Binary MessagePack + 20 ms Audio Clock** | `src/server/fishRealtime.ts` | Immediate `session.start`, `session.started` gating, and a 20 ms `pcm_s16le` pump that pads missing microphone input with silence to keep the session clock moving. Supports both `Bearer` and `Basic` auth. |
+| **Tool Speech (`say` + `flush`)** | `src/server/brain.ts` + `src/server/driveThru.ts` | Flushes a short spoken filler (`"Got it, adding that now."`, `flush: true`) before running tools, then streams Hop 2 on the same `reply_id`. |
 | **Backend Ambience + Speech Ducker** | `src/server/ambience.ts` | Pure-WASM MP3 decode (`mpg123-decoder`) + seamless 72 s drive-thru loop mixed on the **backend** into outbound PCM with `-10 dB` sidechain ducking when the agent speaks. |
 | **Barge-In `heard_text` Alignment & Echo Recovery** | `src/server/brain.ts` + `public/audio-worklets.js` | Fades browser speaker playback over 80 ms on `reply.interrupted`, records **only** `reply.done.heard_text` into LLM history, ignores `aside` interruptions, and automatically resumes unspoken text after `turn.dropped` false barge-ins. |
 | **Vertex AI Gemini Priority Tier** | `src/server/brain.ts` | Switches live between `priority` (`ON_DEMAND_PRIORITY` via `X-Vertex-AI-LLM-Shared-Request-Type: priority`) and `normal` (`ON_DEMAND`), using `gemini-3.8-flash` (`thinkingBudget: 64`) and preserving `thoughtSignature`. |
@@ -68,7 +70,7 @@ realtime-agent-starter/
     │   ├── ambience.ts         # Backend WASM MP3 ambience mixer + -10 dB speech ducker
     │   ├── brain.ts            # Eager-first Gemini orchestrator + commit-gated tools
     │   ├── prompts.ts          # Dynamic spoken prompt builder from session.started.text_rules
-│   │   └── driveThru.ts        # McDonald's menu, POS state, & 8 tool schemas (swap for your business!)
+│   │   └── driveThru.ts        # Demo menu, POS state, & 8 tool schemas (swap for your business!)
     └── client/
         ├── App.tsx             # POS board, config.toml modal, controls, and live Event Inspector
         ├── useAudioRig.ts      # Mic/speaker device enumeration & WebAudio duplex hook
