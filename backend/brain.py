@@ -47,13 +47,19 @@ GEMINI_MODELS: list[dict[str, str]] = [
 ]
 
 
+READ_ONLY_TOOLS = frozenset({"lookup_menu", "get_order"})
+
+
 @dataclass
 class InFlightReply:
     reply_id: str
     turn_id: str
     eager_id: str | None
+    caller_text: str = ""
     task: asyncio.Task[None] | None = None
     cancelled: bool = False
+    committed_event: asyncio.Event = field(default_factory=asyncio.Event)
+    staged_tool_history: list[types.Content] = field(default_factory=list)
 
 
 @dataclass
@@ -162,7 +168,8 @@ class GeminiVoiceBrain:
             text = str(event.get("text", "")).strip()
             if not text or not eager_id:
                 return
-            await self._cancel_active(rt, send_cancel=False)
+            # Cancel any previous speculative reply before starting the new eager pre-run
+            await self._cancel_active(rt, send_cancel=True)
             await self._launch_reply(rt, caller_text=text, turn_id=turn_id, eager_id=eager_id)
 
         elif etype == "turn.resumed":
@@ -183,6 +190,7 @@ class GeminiVoiceBrain:
                 return
 
             if kind == "aside":
+                await self._cancel_active(rt, send_cancel=True)
                 self.history.append(
                     types.Content(
                         role="user",
@@ -199,6 +207,11 @@ class GeminiVoiceBrain:
                 and self._active.eager_id == approved_eager
                 and not self._active.cancelled
             ):
+                # Promote staged read-only tool turns & release any parked write tools immediately
+                if self._active.staged_tool_history:
+                    self.history.extend(self._active.staged_tool_history)
+                    self._active.staged_tool_history.clear()
+                self._active.committed_event.set()
                 await self._emit(
                     "LLM->",
                     {
@@ -210,7 +223,7 @@ class GeminiVoiceBrain:
                 )
                 return
 
-            await self._cancel_active(rt, send_cancel=False)
+            await self._cancel_active(rt, send_cancel=True)
             await self._launch_reply(rt, caller_text=None, turn_id=turn_id, eager_id=None)
 
         elif etype == "reply.done":
@@ -256,7 +269,14 @@ class GeminiVoiceBrain:
     ) -> None:
         self._seq_reply += 1
         reply_id = f"r-{self._seq_reply}-{uuid.uuid4().hex[:5]}"
-        inflight = InFlightReply(reply_id=reply_id, turn_id=turn_id, eager_id=eager_id)
+        inflight = InFlightReply(
+            reply_id=reply_id,
+            turn_id=turn_id,
+            eager_id=eager_id,
+            caller_text=caller_text or "",
+        )
+        if eager_id is None:
+            inflight.committed_event.set()
         self._active = inflight
 
         working_contents = list(self.history)
@@ -380,10 +400,12 @@ class GeminiVoiceBrain:
                         return
 
                     # Append model turn (preserving thought_signature on function_call parts!)
-                    working_contents.append(types.Content(role="model", parts=model_parts))
-                    if caller_text is None:
-                        # Persist tool-call exchange in session history for committed turns
-                        self.history.append(types.Content(role="model", parts=model_parts))
+                    model_turn = types.Content(role="model", parts=model_parts)
+                    working_contents.append(model_turn)
+                    if inflight.committed_event.is_set():
+                        self.history.append(model_turn)
+                    else:
+                        inflight.staged_tool_history.append(model_turn)
 
                     response_parts: list[types.Part] = []
                     for fc_part in function_calls:
@@ -393,10 +415,26 @@ class GeminiVoiceBrain:
                         say_line = str(raw_args.pop("say", "") or "").strip()
 
                         # Zero-dead-air best practice: flush `say` before running the tool
+                        # (Safe during eager too: Fish holds `for=eager_id` speech until commit!)
                         if say_line and not spoken_any and not inflight.cancelled:
                             if not say_line.endswith(" "):
                                 say_line += " "
                             await _send_speech(say_line, flush=True, last=False)
+
+                        # CRITICAL EAGER INVARIANT: mutating tools must wait until turn.committed approves!
+                        if fc.name not in READ_ONLY_TOOLS and not inflight.committed_event.is_set():
+                            await self._emit(
+                                "TOOL->",
+                                {
+                                    "type": "tool.awaiting_commit",
+                                    "reply_id": reply_id,
+                                    "eager_id": eager_id,
+                                    "tool": fc.name,
+                                },
+                            )
+                            await inflight.committed_event.wait()
+                            if inflight.cancelled or not rt.is_live:
+                                return
 
                         t_tool = time.perf_counter()
                         result = self.order_state.execute_tool(fc.name, raw_args)
@@ -423,8 +461,10 @@ class GeminiVoiceBrain:
 
                     tool_resp_content = types.Content(role="user", parts=response_parts)
                     working_contents.append(tool_resp_content)
-                    if caller_text is None:
+                    if inflight.committed_event.is_set():
                         self.history.append(tool_resp_content)
+                    else:
+                        inflight.staged_tool_history.append(tool_resp_content)
 
                 # Safety close if max hops reached
                 await _send_speech("", last=True)

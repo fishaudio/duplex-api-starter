@@ -218,3 +218,102 @@ async def test_full_web_starter_gemini_priority_and_drive_thru_tool_call() -> No
     finally:
         await runner.cleanup()
         await mock_fish.stop()
+
+
+@pytest.mark.asyncio
+async def test_eager_write_tool_gates_on_commit_and_rolls_back_on_resumed() -> None:
+    """Verify write tools (`add_item`) pre-parse on `turn.eager` without mutating state until commit."""
+    from backend.app import _default_credentials_path
+    from backend.brain import GeminiVoiceBrain
+    from backend.drive_thru import DriveThruOrderState
+
+    class DummyRT:
+        is_live = True
+
+        def __init__(self) -> None:
+            self.sent: list[dict[str, Any]] = []
+            self.cancelled: list[str] = []
+
+        async def reply_text(
+            self,
+            reply_id: str,
+            text: str,
+            *,
+            for_id: str | None = None,
+            flush: bool = False,
+            last: bool = False,
+        ) -> None:
+            self.sent.append(
+                {"reply_id": reply_id, "text": text, "for": for_id, "flush": flush, "last": last}
+            )
+
+        async def reply_cancel(self, reply_id: str) -> None:
+            self.cancelled.append(reply_id)
+
+    events: list[dict[str, Any]] = []
+    awaiting_commit = asyncio.Event()
+
+    async def on_ev(_ch: str, payload: dict[str, Any]) -> None:
+        events.append(payload)
+        if payload.get("type") == "tool.awaiting_commit":
+            awaiting_commit.set()
+
+    order = DriveThruOrderState()
+    brain = GeminiVoiceBrain(
+        credentials_path=_default_credentials_path(),
+        model="gemini-3.5-flash-lite",
+        tier="priority",
+        order_state=order,
+        on_event=on_ev,
+    )
+    rt = DummyRT()
+
+    # 1. Discarded eager turn: caller pauses after "One Oreo McFlurry", then resumes speaking!
+    await brain.handle_realtime_event(
+        {"type": "turn.eager", "eager_id": "e_discard", "turn_id": "t1", "text": "One Oreo McFlurry please"},
+        rt,  # type: ignore[arg-type]
+    )
+    await asyncio.wait_for(awaiting_commit.wait(), timeout=10.0)
+    # Tool is parked at commit gate -> order MUST still be empty!
+    assert order.lines == []
+
+    await brain.handle_realtime_event(
+        {"type": "turn.resumed", "eager_id": "e_discard"},
+        rt,  # type: ignore[arg-type]
+    )
+    assert len(rt.cancelled) == 1
+    assert order.lines == []  # Never mutated!
+
+    # 2. Approved eager turn: pre-runs Hop 1 during pause, executes write tool immediately on commit!
+    awaiting_commit.clear()
+    await brain.handle_realtime_event(
+        {"type": "turn.eager", "eager_id": "e_approve", "turn_id": "t2", "text": "One Big Mac please"},
+        rt,  # type: ignore[arg-type]
+    )
+    await asyncio.wait_for(awaiting_commit.wait(), timeout=10.0)
+    assert order.lines == []
+    # Verify first reply frame carried `for="e_approve"`
+    eager_frames = [f for f in rt.sent if f["for"] == "e_approve"]
+    assert len(eager_frames) == 1
+
+    await brain.handle_realtime_event(
+        {
+            "type": "turn.committed",
+            "turn_id": "t2",
+            "text": "One Big Mac please",
+            "kind": "turn",
+            "approved_eager_id": "e_approve",
+            "lead_ms": 260,
+        },
+        rt,  # type: ignore[arg-type]
+    )
+    # Wait for Hop 2 to finish closing reply with last=True
+    for _ in range(80):
+        await asyncio.sleep(0.1)
+        if any(f["last"] and f["reply_id"] == eager_frames[0]["reply_id"] for f in rt.sent):
+            break
+
+    assert len(order.lines) == 1
+    assert "Big Mac" in order.lines[0].name
+    assert any(e.get("type") == "llm.eager_approved" for e in events)
+
