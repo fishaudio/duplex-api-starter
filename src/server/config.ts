@@ -40,7 +40,7 @@ const DEFAULT_CONFIG: AppConfig = {
   vertex_ai: {
     credentials_path: "",
     location: "global",
-    default_model: "gemini-3.5-flash-lite",
+    default_model: "gemini-3.8-flash",
     default_tier: "priority",
   },
   ambience: {
@@ -109,7 +109,7 @@ export function loadAndValidateConfig(overridePath?: string): {
     vertex_ai: {
       credentials_path: String(vx.credentials_path ?? "").trim(),
       location: String(vx.location ?? "global").trim() || "global",
-      default_model: String(vx.default_model ?? "gemini-3.5-flash-lite").trim(),
+      default_model: String(vx.default_model ?? "gemini-3.8-flash").trim(),
       default_tier: defaultTier,
     },
     ambience: {

@@ -23,7 +23,7 @@ reference_id = ""
 # Path to your Google Cloud Service Account JSON file with Vertex AI User permissions
 credentials_path = ""
 location = "global"
-default_model = "gemini-3.5-flash-lite"
+default_model = "gemini-3.8-flash"
 
 # Vertex AI PayGo request tier: "priority" (ON_DEMAND_PRIORITY) or "normal" (ON_DEMAND)
 default_tier = "priority"

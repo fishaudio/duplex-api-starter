@@ -23,12 +23,12 @@ import type { FishRealtimeClient } from "./fishRealtime.ts";
 import { buildDriveThruPrompt } from "./prompts.ts";
 
 export const GEMINI_MODELS: GeminiModelOption[] = [
-  { id: "gemini-3.5-flash-lite", label: "Gemini 3.5 Flash-Lite (Fastest)" },
+  { id: "gemini-3.8-flash", label: "Gemini 3.8 Flash (Recommended)" },
   { id: "gemini-3.5-flash", label: "Gemini 3.5 Flash" },
-  { id: "gemini-3.8-flash", label: "Gemini 3.8 Flash" },
-  { id: "gemini-3.1-flash-lite", label: "Gemini 3.1 Flash-Lite" },
-  { id: "gemini-3-flash-preview", label: "Gemini 3 Flash Preview" },
+  { id: "gemini-3.5-flash-lite", label: "Gemini 3.5 Flash-Lite" },
   { id: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro Preview" },
+  { id: "gemini-3-flash-preview", label: "Gemini 3 Flash Preview" },
+  { id: "gemini-3.1-flash-lite", label: "Gemini 3.1 Flash-Lite" },
 ];
 
 class AsyncGate {
@@ -92,7 +92,7 @@ export class GeminiVoiceBrain {
   constructor(opts: BrainOptions) {
     this.credentialsPath = opts.credentialsPath;
     this.location = opts.location ?? "global";
-    this.model = opts.model ?? "gemini-3.5-flash-lite";
+    this.model = opts.model ?? "gemini-3.8-flash";
     this.tier = opts.tier ?? "priority";
     this.orderState = opts.orderState;
     this.onEvent = opts.onEvent;

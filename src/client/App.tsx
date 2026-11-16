@@ -33,7 +33,7 @@ export function App() {
   const [showEndpointDrawer, setShowEndpointDrawer] = useState<boolean>(false);
 
   const [referenceId, setReferenceId] = useState<string>("");
-  const [geminiModel, setGeminiModel] = useState<string>("gemini-3.5-flash-lite");
+  const [geminiModel, setGeminiModel] = useState<string>("gemini-3.8-flash");
   const [geminiTier, setGeminiTier] = useState<"priority" | "normal">("priority");
   const [sampleRate, setSampleRate] = useState<number>(24000);
 
@@ -70,7 +70,7 @@ export function App() {
     setMeta(data);
     setConfigStatus(data.configStatus);
     setReferenceId(data.configStatus.defaultReferenceId || "");
-    setGeminiModel(data.configStatus.defaultModel || "gemini-3.5-flash-lite");
+    setGeminiModel(data.configStatus.defaultModel || "gemini-3.8-flash");
     setGeminiTier(data.configStatus.defaultTier || "priority");
     setAmbienceEnabled(data.configStatus.ambienceEnabled);
     setAmbienceLevelSafe(data.configStatus.ambienceLevelDb);
