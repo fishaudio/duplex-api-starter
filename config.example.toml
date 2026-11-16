@@ -1,0 +1,34 @@
+# Copy this file to `config.toml` and fill in your credentials before starting a call:
+#   cp config.example.toml config.toml
+
+[server]
+port = 8080
+
+[fish_realtime]
+# Fish Audio Duplex API WebSocket endpoint (`/v1/duplex/converse`)
+endpoint = "wss://api.fish.audio/v1/duplex/converse"
+
+# Authentication scheme:
+#   - "bearer" -> sends `Authorization: Bearer <token>` (Production Fish API Key)
+#   - "basic"  -> sends `Authorization: Basic base64(<username>:<password>)` (Preview / Gateway Basic Auth)
+auth_scheme = "bearer"
+token = ""
+username = ""
+password = ""
+
+# Optional Fish Voice Library model ID (`voice: { reference_id }`); leave empty for default voice
+reference_id = ""
+
+[vertex_ai]
+# Path to your Google Cloud Service Account JSON file with Vertex AI User permissions
+credentials_path = ""
+location = "global"
+default_model = "gemini-3.8-flash"
+
+# Vertex AI PayGo request tier: "priority" (ON_DEMAND_PRIORITY) or "normal" (ON_DEMAND)
+default_tier = "priority"
+
+[ambience]
+# Mix kitchen & drive-thru speaker ambience on the backend with -10 dB speech ducking
+enabled = true
+level_db = 0.0

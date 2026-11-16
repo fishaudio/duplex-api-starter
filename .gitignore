@@ -1,0 +1,14 @@
+# Local config & secrets (copy config.example.toml -> config.toml)
+config.toml
+.env
+.env.*
+*credentials*.json
+*service-account*.json
+
+# Node / Build
+node_modules/
+dist/
+*.tsbuildinfo
+
+# OS
+.DS_Store
