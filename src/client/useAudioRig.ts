@@ -196,7 +196,7 @@ export function useAudioRig() {
       void ctx.resume();
       ctxRef.current = ctx;
 
-      await ctx.audioWorklet.addModule("/audio-worklets.js");
+      await ctx.audioWorklet.addModule("/audio-worklets.js?v=2");
 
       // Zero-gain sink connected to ctx.destination keeps captureNode & playbackNode pulled by WebAudio!
       const zeroGain = ctx.createGain();

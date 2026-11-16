@@ -145,6 +145,14 @@ export async function createStarterServer(configOverridePath?: string): Promise<
       onOrderUpdate: async (snapshot) => {
         sendJson({ kind: "order", order: snapshot });
       },
+      onHangupRequested: async (reason) => {
+        sendJson({
+          kind: "event",
+          channel: "WS",
+          payload: { type: "call.ended_by_agent", reason },
+        });
+        stopActiveCall(true);
+      },
     });
 
     const handleRealtimeEvent = async (channel: string, payload: Record<string, unknown>) => {

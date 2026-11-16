@@ -127,6 +127,21 @@ export function getGeminiTools(): Tool {
       description: "Clear all items from the order if the guest cancels.",
       parameters: { type: Type.OBJECT, properties: { say: SAY_SCHEMA } },
     },
+    {
+      name: "end_call",
+      description:
+        "Hang up and end the call AFTER confirming the final order and saying goodbye, or when the guest says goodbye / asks to end the call.",
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          reason: {
+            type: Type.STRING,
+            description: "Why the call is ending, e.g. 'order_confirmed' or 'guest_goodbye'",
+          },
+          say: SAY_SCHEMA,
+        },
+      },
+    },
   ];
   return { functionDeclarations: declarations };
 }
@@ -300,6 +315,15 @@ export class DriveThruOrderState {
       this.lines = [];
       this.status = "cancelled";
       return { ok: true, cancelled: true, order: this.snapshot() };
+    }
+
+    if (name === "end_call") {
+      return {
+        ok: true,
+        ending_call: true,
+        reason: String(args.reason ?? "completed"),
+        note: "Give a short warm farewell if you have not already; the line will hang up automatically once your speech finishes.",
+      };
     }
 
     return { ok: false, error: `Unknown tool '${name}'` };

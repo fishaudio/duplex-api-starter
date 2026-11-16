@@ -69,6 +69,7 @@ export interface BrainOptions {
   orderState: DriveThruOrderState;
   onEvent?: (channel: string, payload: Record<string, unknown>) => void | Promise<void>;
   onOrderUpdate?: (snapshot: OrderSnapshot) => void | Promise<void>;
+  onHangupRequested?: (reason: string) => void | Promise<void>;
 }
 
 export class GeminiVoiceBrain {
@@ -82,9 +83,11 @@ export class GeminiVoiceBrain {
   private history: Content[] = [];
   private active: InFlightRun | null = null;
   private replyCounter = 0;
+  private pendingHangup: { replyId: string; reason: string } | null = null;
 
   private readonly onEvent?: (channel: string, payload: Record<string, unknown>) => void | Promise<void>;
   private readonly onOrderUpdate?: (snapshot: OrderSnapshot) => void | Promise<void>;
+  private readonly onHangupRequested?: (reason: string) => void | Promise<void>;
 
   constructor(opts: BrainOptions) {
     this.credentialsPath = opts.credentialsPath;
@@ -94,6 +97,7 @@ export class GeminiVoiceBrain {
     this.orderState = opts.orderState;
     this.onEvent = opts.onEvent;
     this.onOrderUpdate = opts.onOrderUpdate;
+    this.onHangupRequested = opts.onHangupRequested;
   }
 
   private buildClient(): { ai: GoogleGenAI; projectId: string } {
@@ -124,6 +128,7 @@ export class GeminiVoiceBrain {
   public resetCall(): void {
     this.history = [];
     this.textRules = {};
+    this.pendingHangup = null;
     if (this.active) {
       this.active.cancelled = true;
       this.active.commitGate.open();
@@ -244,6 +249,7 @@ export class GeminiVoiceBrain {
     }
 
     if (etype === "reply.done") {
+      const replyId = String(event.reply_id ?? "");
       const heard = String(event.heard_text ?? "").trim();
       const unheard = String(event.unheard_text ?? "").trim();
       const status = String(event.status ?? "");
@@ -255,6 +261,20 @@ export class GeminiVoiceBrain {
           role: "user",
           parts: [{ text: `[Speaker note: guest interrupted before hearing: ${unheard}]` }],
         });
+      }
+
+      // When `end_call` was invoked on this reply, wait ~500 ms for browser jitter buffer playout
+      // to finish speaking the farewell words, then hang up cleanly (unless guest barged in!).
+      if (this.pendingHangup && this.pendingHangup.replyId === replyId) {
+        const hangup = this.pendingHangup;
+        this.pendingHangup = null;
+        if (status !== "interrupted") {
+          setTimeout(() => {
+            if (rt.isLive && this.onHangupRequested) {
+              void this.onHangupRequested(hangup.reason);
+            }
+          }, 500);
+        }
       }
     }
   }
@@ -437,6 +457,13 @@ export class GeminiVoiceBrain {
           const tTool = performance.now();
           const result = this.orderState.executeTool(toolName, rawArgs);
           const toolMs = Math.round((performance.now() - tTool) * 100) / 100;
+
+          if (toolName === "end_call" && result.ok) {
+            this.pendingHangup = {
+              replyId: run.replyId,
+              reason: String(rawArgs.reason ?? "completed"),
+            };
+          }
 
           await this.emit("TOOL->", {
             type: "tool.executed",

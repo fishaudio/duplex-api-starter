@@ -1,10 +1,16 @@
 /**
- * Browser AudioWorklets for Fish Audio Realtime (Hardware-Rate Safe):
+ * Browser AudioWorklets for Fish Audio Realtime:
  *
- * Both processors run at the AudioContext's native hardware sampleRate (typically 48,000 Hz on macOS)
- * and resample cleanly inside the worklet to/from the Fish session sampleRate (e.g. 24,000 Hz).
- * Running AudioContext at native hardware rate avoids Chromium/CoreAudio stalls when pairing
- * 48 kHz USB microphones with custom output devices.
+ *  1. `pcm-capture-processor`: runs at native AudioContext hardware rate (e.g. 48 kHz),
+ *     box-averages + resamples cleanly to `targetSampleRate` (e.g. 24 kHz), and emits exact
+ *     20 ms `pcm_s16le` frames.
+ *  2. `pcm-playback-processor`: smooth 300 ms jitter buffer tailored for live-3's ~186 ms
+ *     block bursts:
+ *       - Prebuffers 300 ms ONCE at session start (or after barge-in flush).
+ *       - Never stalls/re-buffers for 300 ms on brief jitter spikes: late bursts play
+ *         immediately (naturally growing the playout cushion by the exact spike duration)
+ *         with 4 ms raised-edge ramps on tail & onset so there are zero clicks or chops.
+ *       - Smooth 80 ms raised-cosine fade-out on caller barge-in (`flush`).
  */
 
 class PcmCaptureProcessor extends AudioWorkletProcessor {
@@ -12,14 +18,13 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
     super();
     const opts = (options && options.processorOptions) || {};
     this.targetRate = opts.targetSampleRate || 24000;
-    this.inRate = sampleRate; // WebAudio global hardware rate (e.g. 48000)
+    this.inRate = sampleRate;
     this.ratio = this.inRate / this.targetRate;
 
-    this.frameSamples = Math.round(this.targetRate * 0.02); // Exact 20 ms chunk
+    this.frameSamples = Math.round(this.targetRate * 0.02);
     this.outBuf = new Int16Array(this.frameSamples);
     this.outFill = 0;
 
-    // Fractional resampler state with box-averaging anti-alias accumulator
     this.inPos = 0;
     this.accSum = 0;
     this.accCount = 0;
@@ -30,7 +35,6 @@ class PcmCaptureProcessor extends AudioWorkletProcessor {
   }
 
   process(inputs, outputs) {
-    // Keep downstream zero-gain pull active
     if (outputs[0] && outputs[0][0]) {
       outputs[0][0].fill(0);
     }
@@ -83,7 +87,7 @@ class PcmPlaybackProcessor extends AudioWorkletProcessor {
     this.streamRate = opts.streamSampleRate || 24000;
     this.hwRate = sampleRate;
 
-    this.capacity = this.hwRate * 10; // 10-second ring buffer in hardware frames
+    this.capacity = this.hwRate * 12; // 12-second ring buffer in hardware frames
     this.ring = new Float32Array(this.capacity);
     this.readIdx = 0;
     this.writeIdx = 0;
@@ -91,11 +95,18 @@ class PcmPlaybackProcessor extends AudioWorkletProcessor {
     this.prevInSample = 0;
     this.resamplePhase = 0;
 
-    this.prebufferSamples = Math.round(this.hwRate * 0.22); // 220 ms jitter cushion
-    this.buffering = true;
-    this.gain = 0;
-    this.fadeStep = 1 / Math.max(1, Math.round(this.hwRate * 0.004));
+    // 300 ms initial cushion covers live-3's ~186 ms block bursts + network jitter
+    this.prebufferSamples = Math.round(this.hwRate * 0.3);
+    this.maxBufferSamples = Math.round(this.hwRate * 1.4);
+    this.targetAfterTrim = Math.round(this.hwRate * 0.4);
+    this.initialBuffering = true;
 
+    // 4 ms anti-click edge ramp on underrun tail and recovery onset
+    this.fadeSamples = Math.max(1, Math.round(this.hwRate * 0.004));
+    this.fadeStep = 1 / this.fadeSamples;
+    this.gain = 0;
+
+    // 80 ms smooth raised-cosine fade-out on caller barge-in (`flush`)
     this.flushTotal = Math.round(this.hwRate * 0.08);
     this.flushLeft = 0;
 
@@ -131,44 +142,52 @@ class PcmPlaybackProcessor extends AudioWorkletProcessor {
   enqueueResampled(pcm16, immediate) {
     if (pcm16.length === 0) return;
     if (immediate) {
-      this.buffering = false;
+      this.initialBuffering = false;
     }
+
     if (this.streamRate === this.hwRate) {
       for (let i = 0; i < pcm16.length; i++) {
         this.pushHwSample(pcm16[i] / 32768.0);
       }
-      return;
-    }
+    } else {
+      const step = this.streamRate / this.hwRate;
+      let prev = this.prevInSample;
+      let pos = this.resamplePhase;
 
-    // Linear interpolation from streamRate -> hwRate
-    const step = this.streamRate / this.hwRate;
-    let prev = this.prevInSample;
-    let pos = this.resamplePhase;
-
-    for (let i = 0; i < pcm16.length; i++) {
-      const curr = pcm16[i] / 32768.0;
-      while (pos < 1.0) {
-        const interp = prev + (curr - prev) * pos;
-        this.pushHwSample(interp);
-        pos += step;
+      for (let i = 0; i < pcm16.length; i++) {
+        const curr = pcm16[i] / 32768.0;
+        while (pos < 1.0) {
+          const interp = prev + (curr - prev) * pos;
+          this.pushHwSample(interp);
+          pos += step;
+        }
+        pos -= 1.0;
+        prev = curr;
       }
-      pos -= 1.0;
-      prev = curr;
+      this.prevInSample = prev;
+      this.resamplePhase = pos;
     }
-    this.prevInSample = prev;
-    this.resamplePhase = pos;
+
+    // Bound runaway latency if browser tab was background-stalled > 1.4 s
+    if (this.available > this.maxBufferSamples && this.flushLeft === 0) {
+      const drop = this.available - this.targetAfterTrim;
+      this.readIdx = (this.readIdx + drop) % this.capacity;
+      this.available -= drop;
+      this.gain = 0; // 4 ms smooth ramp-in from new read position
+    }
   }
 
   process(_inputs, outputs) {
     const out = outputs[0] && outputs[0][0] ? outputs[0][0] : null;
     if (!out) return true;
 
-    if (this.buffering && this.available >= this.prebufferSamples) {
-      this.buffering = false;
+    if (this.initialBuffering && this.available >= this.prebufferSamples) {
+      this.initialBuffering = false;
     }
 
     for (let i = 0; i < out.length; i++) {
       let sample = 0;
+
       if (this.flushLeft > 0) {
         const raw = this.ring[this.readIdx];
         this.readIdx = (this.readIdx + 1) % this.capacity;
@@ -180,18 +199,24 @@ class PcmPlaybackProcessor extends AudioWorkletProcessor {
         if (this.flushLeft === 0) {
           this.readIdx = this.writeIdx;
           this.available = 0;
-          this.buffering = true;
+          this.initialBuffering = true;
           this.gain = 0;
         }
-      } else if (!this.buffering && this.available > 0) {
-        sample = this.ring[this.readIdx];
+      } else if (!this.initialBuffering && this.available > 0) {
+        const raw = this.ring[this.readIdx];
         this.readIdx = (this.readIdx + 1) % this.capacity;
         this.available--;
+
+        // Smooth 4 ms fade-in after startup/gap, and 4 ms fade-out if draining near 0
         this.gain = Math.min(1, this.gain + this.fadeStep);
-        sample *= this.gain;
+        const tailFade = this.available < this.fadeSamples ? this.available / this.fadeSamples : 1;
+        sample = raw * Math.min(this.gain, tailFade);
+        if (this.available === 0) {
+          this.gain = 0;
+        }
       } else {
-        this.buffering = true;
-        this.gain = Math.max(0, this.gain - this.fadeStep);
+        // Initial prebuffer OR brief late-packet gap (do NOT set initialBuffering=true here!)
+        this.gain = 0;
         sample = 0;
       }
 
