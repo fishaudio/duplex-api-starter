@@ -1,78 +1,90 @@
-# Fish Audio Realtime Voice Agent Starter (Full-Stack TypeScript)
+# Fish Audio Realtime Voice Agent Starter
 
-For a nontechnical introduction and a short demo script, see the [sales guide](docs/sales-guide.md). The guide is published ahead of the refreshed demo code.
+> **Preview — invitation only.** Access to the Fish Audio Realtime service is currently limited to selected customers. A public repository does not grant service access.
 
-A clean, zero-native-dependency **Full-Stack TypeScript (Node.js + React 19 + Vite)** reference application demonstrating how to build a full-duplex, interruptible voice agent with **Fish Audio Realtime (`/v1/realtime/converse`)**, **speculative eager turns**, **tool calling**, and **backend ambience mixing**.
+A browser demo for an interruptible voice agent. Speak to a fictional diner order taker, ask about the menu, change an order, and see the resulting actions on screen.
 
-Out of the box, it runs an interactive **drive-thru ordering** scenario where callers order aloud over realistic kitchen & speaker-post ambience while watching every protocol frame, Gemini hop, and tool call stream live.
+The application uses **TypeScript**, with a **React** browser interface and a **Node.js** server. Fish Audio Realtime handles the live voice connection; **Gemini on Vertex AI** generates replies and selects tools.
 
----
+For a nontechnical introduction and a short demo script, read the [sales guide](docs/sales-guide.md). The guide is shared ahead of the refreshed demo code; use a verified presenter build for that script.
 
-## Quickstart (1 Toolchain, 2 Commands)
+## Run locally
 
-### Prerequisites
+You need:
 
-- **Node.js 20+** and `npm`
-- Fish Audio Realtime credentials (`Bearer` API key or preview `Basic` credentials)
-- A Google Cloud Vertex AI Service Account JSON file
+- Node.js 20 or later and npm.
+- An invitation to the Fish Audio Realtime preview and service credentials.
+- A Google Cloud project with Vertex AI access and a service account JSON file.
+- A browser with microphone access.
 
-### 1. Configure `config.toml`
+Copy the configuration template:
 
 ```bash
 cp config.example.toml config.toml
 ```
 
-Edit `config.toml` to configure your endpoint, authentication (`bearer` or `basic`), and Vertex AI credentials path. *(If any required field is missing, the web UI automatically opens a setup guide modal with a one-click **Re-check `config.toml`** button.)*
+Edit `config.toml` with your Realtime endpoint and credentials, then set the path to your Vertex AI service account file. The template explains the settings. Keep both credential files on your server; `config.toml` is ignored by Git.
 
-### 2. Install & start
+Install dependencies and start development mode:
 
 ```bash
 npm install
 npm run dev
 ```
 
-Open **http://localhost:5173** (or run `npm run build && npm start` for single-port production mode on **http://localhost:8080**).
+Open [localhost:5173](http://localhost:5173), select your microphone and speaker, and start a call. If configuration is missing, the setup dialog lists the fields to complete.
 
----
+To serve the built application on one port:
 
-## Key Best Practices Demonstrated
+```bash
+npm run build
+npm start
+```
 
-| Best Practice | File | Why It Matters |
-| --- | --- | --- |
-| **Eager-First Turn Taking + Write-Tool Commit Gate** | `src/server/brain.ts` | Starts LLM streaming on `turn.eager` (`for=eager_id`) so Fish can prepare speech before the turn is committed; parks mutating tools at `commitGate` until `turn.committed` approves `eager_id` so discarded pauses never create phantom orders. |
-| **Binary MessagePack + 20 ms Audio Clock** | `src/server/fishRealtime.ts` | Immediate `session.start`, `session.started` gating, and a 20 ms `pcm_s16le` pump that pads missing microphone input with silence to keep the session clock moving. Supports both `Bearer` and `Basic` auth. |
-| **Tool Speech (`say` + `flush`)** | `src/server/brain.ts` + `src/server/driveThru.ts` | Flushes a short spoken filler (`"Got it, adding that now."`, `flush: true`) before running tools, then streams Hop 2 on the same `reply_id`. |
-| **Backend Ambience + Speech Ducker** | `src/server/ambience.ts` | Pure-WASM MP3 decode (`mpg123-decoder`) + seamless 72 s drive-thru loop mixed on the **backend** into outbound PCM with `-10 dB` sidechain ducking when the agent speaks. |
-| **Barge-In `heard_text` Alignment & Echo Recovery** | `src/server/brain.ts` + `public/audio-worklets.js` | Fades browser speaker playback over 80 ms on `reply.interrupted`, records **only** `reply.done.heard_text` into LLM history, ignores `aside` interruptions, and automatically resumes unspoken text after `turn.dropped` false barge-ins. |
-| **Vertex AI Gemini Priority Tier** | `src/server/brain.ts` | Switches live between `priority` (`ON_DEMAND_PRIORITY` via `X-Vertex-AI-LLM-Shared-Request-Type: priority`) and `normal` (`ON_DEMAND`), using `gemini-3.8-flash` (`thinkingBudget: 64`) and preserving `thoughtSignature`. |
+Then open [localhost:8080](http://localhost:8080).
 
----
+## What the demo includes
 
-## Project Structure
+- A menu and live order screen with quantities, modifiers, and totals.
+- Tools to look up menu items and add, change, remove, or confirm an order.
+- Interruptible speech and an event inspector for turns, replies, and tool calls.
+- Microphone and speaker selection, browser echo cancellation, and a playback buffer.
+- Optional kitchen ambience, mixed on the server and lowered while the agent speaks.
+- Gemini model and Vertex AI traffic-tier selection.
 
-```text
-realtime-agent-starter/
-├── AGENTS.md                   # Guide & protocol invariants for AI coding agents (Claude/Cursor/Codex)
-├── config.example.toml         # Endpoint, Bearer/Basic auth, and Vertex AI config template
-├── package.json                # Single unified TypeScript toolchain
-├── public/
-│   └── audio-worklets.js       # 20 ms PCM capture + 300 ms jitter buffer + 80 ms barge-in fade
-├── assets/
-│   ├── drive_thru.mp3          # CC0 1.0 kitchen + drive-thru lane ambience loop
-│   └── SOURCES.md              # CC0 1.0 attributions
-└── src/
-    ├── shared/
-    │   └── types.ts            # End-to-end types shared between Node server & React UI
-    ├── server/
-    │   ├── index.ts            # HTTP (/api/meta, /api/gemini-ping) + Browser /ws bridge
-    │   ├── config.ts           # Hot-reloading config.toml loader & completeness validator
-    │   ├── fishRealtime.ts     # Fish Realtime MessagePack client + 20 ms silence clock
-    │   ├── ambience.ts         # Backend WASM MP3 ambience mixer + -10 dB speech ducker
-    │   ├── brain.ts            # Eager-first Gemini orchestrator + commit-gated tools
-    │   ├── prompts.ts          # Dynamic spoken prompt builder from session.started.text_rules
-│   │   └── driveThru.ts        # Demo menu, POS state, & 8 tool schemas (swap for your business!)
-    └── client/
-        ├── App.tsx             # POS board, config.toml modal, controls, and live Event Inspector
-        ├── useAudioRig.ts      # Mic/speaker device enumeration & WebAudio duplex hook
-        └── styles.css          # UI styling
+The menu and prices are sample data. Order confirmation updates demo state; it does not submit a real order or take payment. Echo cancellation and response latency depend on the browser, devices, network, and selected model.
+
+## How the conversation works
+
+1. The browser sends microphone audio to the Node.js server.
+2. The server maintains a Realtime WebSocket connection to Fish Audio.
+3. When a caller pauses, Gemini can start preparing a response before the turn is final. This is called an **eager turn**.
+4. Menu and order lookups can run immediately. Tools that change an order wait until Fish commits the caller's turn, so an abandoned pause cannot create an order.
+5. Gemini's text is streamed to Fish for speech, and tool results update the order screen.
+
+The server keeps the caller's audio clock running even during silence. After an interruption, conversation history uses the words the caller actually heard. The call closes after the farewell finishes playing.
+
+## Customize the example
+
+Start with these files:
+
+| File | Purpose |
+| --- | --- |
+| `config.example.toml` | Connection, authentication, model, and ambience settings. |
+| `src/server/driveThru.ts` | Sample menu, order state, and business tools. Replace this for another workflow. |
+| `src/server/prompts.ts` | The agent's role, ordering instructions, and spoken-text rules. |
+| `src/client/App.tsx` | Browser controls, order display, and event inspector. |
+| `src/server/brain.ts` | Gemini requests, tool execution, and conversation history. |
+| `src/server/fishRealtime.ts` | Fish Realtime protocol and continuous audio delivery. |
+| `src/client/useAudioRig.ts` and `public/audio-worklets.js` | Browser capture, playback, and audio routing. |
+| `src/server/ambience.ts` | Background sound mixing. Attribution is in [assets/SOURCES.md](assets/SOURCES.md). |
+
+Read [AGENTS.md](AGENTS.md) before changing the protocol or turn-handling code. A production integration also needs application authentication, real business systems, monitoring, and testing for its workflow.
+
+## Check changes
+
+```bash
+npm run typecheck
+npm test
+npm run build
 ```

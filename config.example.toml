@@ -29,6 +29,6 @@ default_model = "gemini-3.8-flash"
 default_tier = "priority"
 
 [ambience]
-# Mix McDonald's kitchen & drive-thru speaker ambience on the backend with -10 dB speech ducking
+# Mix kitchen & drive-thru speaker ambience on the backend with -10 dB speech ducking
 enabled = true
 level_db = 0.0

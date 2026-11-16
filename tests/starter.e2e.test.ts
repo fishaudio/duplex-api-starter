@@ -36,16 +36,16 @@ describe("Full-Stack TypeScript Realtime Agent Starter", () => {
   it("executes all 8 Drive-Thru POS tools accurately (lookup, add, update, remove, get, confirm, cancel, end_call)", () => {
     const pos = new DriveThruOrderState();
 
-    const menu = pos.executeTool("lookup_menu", { query: "Big Mac" });
+    const menu = pos.executeTool("lookup_menu", { query: "Burger" });
     expect(menu.ok).toBe(true);
-    expect((menu.items as Array<{ name: string }>).some((i) => i.name === "Big Mac")).toBe(true);
+    expect((menu.items as Array<{ name: string }>).some((i) => i.name === "Burger")).toBe(true);
 
     const added = pos.executeTool("add_item", {
-      item: "Big Mac",
+      item: "Burger",
       qty: 1,
       size: "large",
       meal: true,
-      drink: "Sprite",
+      drink: "Lemon-Lime Soda",
       modifiers: ["no pickles"],
     });
     expect(added.ok).toBe(true);
@@ -57,10 +57,10 @@ describe("Full-Stack TypeScript Realtime Agent Starter", () => {
     expect(added2.ok).toBe(true);
     expect(pos.lines).toHaveLength(2);
 
-    const updated = pos.executeTool("update_item", { line: 1, qty: 2, drink: "Coca-Cola" });
+    const updated = pos.executeTool("update_item", { line: 1, qty: 2, drink: "Cola" });
     expect(updated.ok).toBe(true);
     expect(pos.lines[0].qty).toBe(2);
-    expect(pos.lines[0].drink).toBe("Coca-Cola");
+    expect(pos.lines[0].drink).toBe("Cola");
 
     const removed = pos.executeTool("remove_item", { line: 2 });
     expect(removed.ok).toBe(true);
@@ -218,12 +218,12 @@ describe("Full-Stack TypeScript Realtime Agent Starter", () => {
         },
       });
 
-      // 1. Eager pause followed by `turn.resumed` -> MUST NOT add Oreo McFlurry!
+      // 1. Eager pause followed by `turn.resumed` -> MUST NOT add Cookie Sundae!
       const parked1 = new Promise<void>((r) => {
         parkedResolve = r;
       });
       await brain.handleRealtimeEvent(
-        { type: "turn.eager", eager_id: "e_drop", turn_id: "t1", text: "One Oreo McFlurry please" },
+        { type: "turn.eager", eager_id: "e_drop", turn_id: "t1", text: "One Cookie Sundae please" },
         fakeRt,
       );
       await parked1;
@@ -238,7 +238,7 @@ describe("Full-Stack TypeScript Realtime Agent Starter", () => {
         parkedResolve = r;
       });
       await brain.handleRealtimeEvent(
-        { type: "turn.eager", eager_id: "e_ok", turn_id: "t2", text: "One Big Mac please" },
+        { type: "turn.eager", eager_id: "e_ok", turn_id: "t2", text: "One Burger please" },
         fakeRt,
       );
       await parked2;
@@ -248,7 +248,7 @@ describe("Full-Stack TypeScript Realtime Agent Starter", () => {
         {
           type: "turn.committed",
           turn_id: "t2",
-          text: "One Big Mac please",
+          text: "One Burger please",
           kind: "turn",
           approved_eager_id: "e_ok",
           lead_ms: 240,
@@ -266,7 +266,7 @@ describe("Full-Stack TypeScript Realtime Agent Starter", () => {
         }
       }
       expect(orderState.lines).toHaveLength(1);
-      expect(orderState.lines[0].name).toContain("Big Mac");
+      expect(orderState.lines[0].name).toContain("Burger");
       expect(events.some((e) => e.type === "llm.eager_approved")).toBe(true);
     },
     30_000,

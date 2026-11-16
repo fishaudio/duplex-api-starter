@@ -28,15 +28,11 @@ import { buildDriveThruPrompt } from "./prompts.ts";
 
 export const GEMINI_MODELS: GeminiModelOption[] = [
   { id: "gemini-3.8-flash", label: "Gemini 3.8 Flash (Recommended)" },
-  { id: "gemini-3.5-flash", label: "Gemini 3.5 Flash" },
   { id: "gemini-3.5-flash-lite", label: "Gemini 3.5 Flash-Lite" },
-  { id: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro Preview" },
-  { id: "gemini-3-flash-preview", label: "Gemini 3 Flash Preview" },
-  { id: "gemini-3.1-flash-lite", label: "Gemini 3.1 Flash-Lite" },
 ];
 
 function getThinkingConfig(model: string): { thinkingBudget?: number; thinkingLevel?: ThinkingLevel } {
-  // gemini-3.8 / 3.5 Flash achieve ~1.5-1.7s TTFT with thinkingBudget=64 while keeping clean tool calls
+  // Keep a small thinking budget for the supported Flash models.
   if (model.startsWith("gemini-3.8") || model.startsWith("gemini-3.5")) {
     return { thinkingBudget: 64 };
   }
@@ -188,7 +184,7 @@ export class GeminiVoiceBrain {
 
     const stream = await ai.models.generateContentStream({
       model: this.model,
-      contents: "Greet a guest pulling up to the McDonald's drive-thru speaker in one short sentence.",
+      contents: "Greet a guest pulling up to a neighborhood diner drive-thru speaker in one short sentence.",
       config: {
         systemInstruction: buildDriveThruPrompt(this.textRules, this.orderState.daypart),
         temperature: 0.4,
@@ -225,7 +221,7 @@ export class GeminiVoiceBrain {
 
     if (etype === "session.started") {
       this.textRules = (event.text_rules ?? {}) as TextRules;
-      rt.replyText("r-welcome", "Welcome to McDonald's! What can I get started for you today?", {
+      rt.replyText("r-welcome", "Welcome! What can I get started for you today?", {
         last: true,
       });
       return;

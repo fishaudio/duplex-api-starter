@@ -315,7 +315,6 @@ default_tier = "priority"`}</pre>
       <header className="topbar">
         <div className="topbar-row">
           <div className="brand">
-            <span className="brand-arch">M</span>
             <span>Drive-Thru Realtime Agent</span>
           </div>
 
@@ -582,7 +581,7 @@ default_tier = "priority"`}</pre>
               {!order || order.lines.length === 0 ? (
                 <div className="empty-order">
                   Start the call and order aloud — e.g.{" "}
-                  <em>&ldquo;Can I get a Big Mac meal with a large Sprite, no pickles?&rdquo;</em>
+                  <em>&ldquo;Can I get a Burger meal with a large Lemon-Lime Soda, no pickles?&rdquo;</em>
                 </div>
               ) : (
                 order.lines.map((line) => (

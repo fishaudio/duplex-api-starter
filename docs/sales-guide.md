@@ -1,5 +1,7 @@
 # Fish Audio Realtime Voice Agent
 
+> **Preview — invitation only.** Access to the Fish Audio Realtime service is currently limited to selected customers. A public repository does not grant service access.
+
 Fish Audio Realtime lets people talk with a voice agent, interrupt it, and continue the conversation while the agent takes actions through tools. This starter demonstrates that experience in a browser, with a live order screen and an event inspector that shows what happened.
 
 The example is a fictional neighborhood diner: a guest asks about the menu, orders a burger and fries, changes an item, and confirms the order. The same application structure can be adapted to other conversational workflows by replacing the scenario, business data, and tools.
@@ -80,4 +82,4 @@ No. Confirmation changes the demo order state. Production payment and fulfillmen
 An engineer configures Node.js, Fish Audio Realtime credentials, and Vertex AI credentials, then starts the application. Use the repository's setup instructions for the matching code version. Credentials belong on the server and should never appear in a screen share, customer handout, or recording.
 
 **What can sales share now?**  
-This guide and a demonstration of a verified build. The repository is private, so a GitHub link requires repository access. Availability, pricing, service commitments, and deployment scope should be confirmed for the customer's project separately.
+This guide and a demonstration of a verified build. The repository and this guide can be shared publicly. Running a live demo still requires an invitation to the Fish Audio Realtime preview. Availability, pricing, service commitments, and deployment scope should be confirmed for the customer's project separately.

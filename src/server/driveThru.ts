@@ -1,5 +1,5 @@
 /**
- * McDonald's Drive-Thru Menu, Order POS State Machine, and Gemini Tool Definitions.
+ * Fictional Diner Drive-Thru Menu, Order POS State Machine, and Gemini Tool Definitions.
  *
  * To adapt this starter to your own business (hotel desk, clinic booking, retail CRM),
  * swap this single file and update `src/server/prompts.ts`.
@@ -11,33 +11,33 @@ import type { MenuItem, OrderLine, OrderSnapshot } from "../shared/types.ts";
 const TAX_RATE = 0.0825;
 
 export const MENU_CATALOG: MenuItem[] = [
-  { id: "big_mac", name: "Big Mac", category: "Burgers", daypart: "regular", price: 5.99, meal_add: 3.5 },
-  { id: "qpc", name: "Quarter Pounder with Cheese", category: "Burgers", daypart: "regular", price: 6.39, meal_add: 3.5 },
-  { id: "double_qpc", name: "Double Quarter Pounder with Cheese", category: "Burgers", daypart: "regular", price: 7.89, meal_add: 3.5 },
-  { id: "mcdouble", name: "McDouble", category: "Burgers", daypart: "regular", price: 3.19, meal_add: 3.2 },
+  { id: "burger", name: "Burger", category: "Burgers", daypart: "regular", price: 5.99, meal_add: 3.5 },
+  { id: "bacon_burger", name: "Bacon Burger", category: "Burgers", daypart: "regular", price: 6.39, meal_add: 3.5 },
+  { id: "double_burger", name: "Double Burger", category: "Burgers", daypart: "regular", price: 7.89, meal_add: 3.5 },
+  { id: "double_cheeseburger", name: "Double Cheeseburger", category: "Burgers", daypart: "regular", price: 3.19, meal_add: 3.2 },
   { id: "cheeseburger", name: "Cheeseburger", category: "Burgers", daypart: "regular", price: 2.49, meal_add: 3.2 },
-  { id: "mcchicken", name: "McChicken", category: "Chicken & Fish", daypart: "regular", price: 3.19, meal_add: 3.2 },
-  { id: "mccrispy", name: "McCrispy", category: "Chicken & Fish", daypart: "regular", price: 5.69, meal_add: 3.5 },
-  { id: "spicy_mccrispy", name: "Spicy McCrispy", category: "Chicken & Fish", daypart: "regular", price: 5.89, meal_add: 3.5 },
-  { id: "filet_o_fish", name: "Filet-O-Fish", category: "Chicken & Fish", daypart: "regular", price: 5.49, meal_add: 3.5 },
-  { id: "mcnuggets_6", name: "6 Piece Chicken McNuggets", category: "Chicken & Fish", daypart: "regular", price: 3.99, meal_add: 3.2 },
-  { id: "mcnuggets_10", name: "10 Piece Chicken McNuggets", category: "Chicken & Fish", daypart: "regular", price: 5.79, meal_add: 3.5 },
-  { id: "mcnuggets_20", name: "20 Piece Chicken McNuggets", category: "Chicken & Fish", daypart: "regular", price: 8.99, meal_add: 0 },
-  { id: "egg_mcmuffin", name: "Egg McMuffin", category: "Breakfast", daypart: "breakfast", price: 4.79, meal_add: 2.8 },
-  { id: "sausage_mcmuffin_egg", name: "Sausage McMuffin with Egg", category: "Breakfast", daypart: "breakfast", price: 4.99, meal_add: 2.8 },
+  { id: "chicken_sandwich", name: "Chicken Sandwich", category: "Chicken & Fish", daypart: "regular", price: 3.19, meal_add: 3.2 },
+  { id: "crispy_chicken_sandwich", name: "Crispy Chicken Sandwich", category: "Chicken & Fish", daypart: "regular", price: 5.69, meal_add: 3.5 },
+  { id: "spicy_chicken_sandwich", name: "Spicy Chicken Sandwich", category: "Chicken & Fish", daypart: "regular", price: 5.89, meal_add: 3.5 },
+  { id: "fish_sandwich", name: "Fish Sandwich", category: "Chicken & Fish", daypart: "regular", price: 5.49, meal_add: 3.5 },
+  { id: "chicken_nuggets_6", name: "6 Piece Chicken Nuggets", category: "Chicken & Fish", daypart: "regular", price: 3.99, meal_add: 3.2 },
+  { id: "chicken_nuggets_10", name: "10 Piece Chicken Nuggets", category: "Chicken & Fish", daypart: "regular", price: 5.79, meal_add: 3.5 },
+  { id: "chicken_nuggets_20", name: "20 Piece Chicken Nuggets", category: "Chicken & Fish", daypart: "regular", price: 8.99, meal_add: 0 },
+  { id: "egg_cheese_muffin", name: "Egg & Cheese Muffin", category: "Breakfast", daypart: "breakfast", price: 4.79, meal_add: 2.8 },
+  { id: "sausage_egg_muffin", name: "Sausage & Egg Muffin", category: "Breakfast", daypart: "breakfast", price: 4.99, meal_add: 2.8 },
   { id: "bacon_egg_cheese_biscuit", name: "Bacon, Egg & Cheese Biscuit", category: "Breakfast", daypart: "breakfast", price: 4.89, meal_add: 2.8 },
-  { id: "sausage_mcgriddles", name: "Sausage, Egg & Cheese McGriddles", category: "Breakfast", daypart: "breakfast", price: 5.29, meal_add: 2.8 },
+  { id: "sausage_breakfast_sandwich", name: "Sausage Breakfast Sandwich", category: "Breakfast", daypart: "breakfast", price: 5.29, meal_add: 2.8 },
   { id: "hotcakes", name: "Hotcakes", category: "Breakfast", daypart: "breakfast", price: 4.39, meal_add: 0 },
   { id: "hash_browns", name: "Hash Browns", category: "Sides", daypart: "breakfast", price: 2.39, meal_add: 0 },
   { id: "fries", name: "French Fries", category: "Sides", daypart: "regular", price: 3.29, sizes: { small: 2.49, medium: 3.29, large: 3.99 } },
-  { id: "oreo_mcflurry", name: "Oreo McFlurry", category: "Sweets", daypart: "all", price: 4.39 },
+  { id: "cookie_sundae", name: "Cookie Sundae", category: "Sweets", daypart: "all", price: 4.39 },
   { id: "apple_pie", name: "Baked Apple Pie", category: "Sweets", daypart: "all", price: 1.89 },
   { id: "vanilla_shake", name: "Vanilla Shake", category: "Sweets", daypart: "all", price: 3.99, sizes: { small: 3.49, medium: 3.99, large: 4.49 } },
   { id: "chocolate_shake", name: "Chocolate Shake", category: "Sweets", daypart: "all", price: 3.99, sizes: { small: 3.49, medium: 3.99, large: 4.49 } },
-  { id: "coke", name: "Coca-Cola", category: "Drinks", daypart: "all", price: 1.79, sizes: { small: 1.49, medium: 1.79, large: 2.19 } },
-  { id: "diet_coke", name: "Diet Coke", category: "Drinks", daypart: "all", price: 1.79, sizes: { small: 1.49, medium: 1.79, large: 2.19 } },
-  { id: "sprite", name: "Sprite", category: "Drinks", daypart: "all", price: 1.79, sizes: { small: 1.49, medium: 1.79, large: 2.19 } },
-  { id: "dr_pepper", name: "Dr Pepper", category: "Drinks", daypart: "all", price: 1.79, sizes: { small: 1.49, medium: 1.79, large: 2.19 } },
+  { id: "cola", name: "Cola", category: "Drinks", daypart: "all", price: 1.79, sizes: { small: 1.49, medium: 1.79, large: 2.19 } },
+  { id: "diet_cola", name: "Diet Cola", category: "Drinks", daypart: "all", price: 1.79, sizes: { small: 1.49, medium: 1.79, large: 2.19 } },
+  { id: "lemon_lime_soda", name: "Lemon-Lime Soda", category: "Drinks", daypart: "all", price: 1.79, sizes: { small: 1.49, medium: 1.79, large: 2.19 } },
+  { id: "iced_tea", name: "Iced Tea", category: "Drinks", daypart: "all", price: 1.79, sizes: { small: 1.49, medium: 1.79, large: 2.19 } },
   { id: "coffee", name: "Premium Roast Coffee", category: "Drinks", daypart: "all", price: 1.99, sizes: { small: 1.59, medium: 1.99, large: 2.39 } },
   { id: "iced_coffee", name: "Iced Coffee", category: "Drinks", daypart: "all", price: 2.69, sizes: { small: 2.29, medium: 2.69, large: 3.09 } },
   { id: "orange_juice", name: "Orange Juice", category: "Drinks", daypart: "all", price: 2.89 },
@@ -57,11 +57,11 @@ export function getGeminiTools(): Tool {
       parameters: {
         type: Type.OBJECT,
         properties: {
-          item: { type: Type.STRING, description: "Menu item name, e.g. 'Big Mac', '10 Piece McNuggets', 'Coca-Cola'" },
+          item: { type: Type.STRING, description: "Menu item name, e.g. 'Burger', '10 Piece Chicken Nuggets', 'Cola'" },
           qty: { type: Type.INTEGER, description: "Quantity (default 1)" },
           size: { type: Type.STRING, description: "small, medium, or large" },
           meal: { type: Type.BOOLEAN, description: "True to make it a combo meal with side and drink" },
-          drink: { type: Type.STRING, description: "Drink choice when meal=true, e.g. 'Coke', 'Sprite'" },
+          drink: { type: Type.STRING, description: "Drink choice when meal=true, e.g. 'Cola', 'Lemon-Lime Soda'" },
           modifiers: {
             type: Type.ARRAY,
             items: { type: Type.STRING },
@@ -149,21 +149,20 @@ export function getGeminiTools(): Tool {
 function matchMenuItem(query: string): MenuItem | undefined {
   const q = query.trim().toLowerCase();
   const aliases: Record<string, string> = {
-    coke: "coke",
-    "coca cola": "coke",
+    cola: "cola",
     fries: "fries",
     "french fries": "fries",
-    nuggets: "mcnuggets_10",
-    mcnuggets: "mcnuggets_10",
-    "6 piece": "mcnuggets_6",
-    "6 pc": "mcnuggets_6",
-    "10 piece": "mcnuggets_10",
-    "10 pc": "mcnuggets_10",
-    "20 piece": "mcnuggets_20",
-    "quarter pounder": "qpc",
-    "double quarter pounder": "double_qpc",
-    mcflurry: "oreo_mcflurry",
-    mcgriddle: "sausage_mcgriddles",
+    nuggets: "chicken_nuggets_10",
+    "chicken nuggets": "chicken_nuggets_10",
+    "6 piece": "chicken_nuggets_6",
+    "6 pc": "chicken_nuggets_6",
+    "10 piece": "chicken_nuggets_10",
+    "10 pc": "chicken_nuggets_10",
+    "20 piece": "chicken_nuggets_20",
+    "bacon burger": "bacon_burger",
+    "double burger": "double_burger",
+    sundae: "cookie_sundae",
+    "breakfast sandwich": "sausage_breakfast_sandwich",
   };
   if (aliases[q]) {
     return MENU_CATALOG.find((m) => m.id === aliases[q]);
@@ -241,7 +240,7 @@ export class DriveThruOrderState {
       const qty = Math.max(1, Number(args.qty ?? 1));
       const size = String(args.size ?? "medium").toLowerCase();
       const meal = Boolean(args.meal) && Boolean((entry.meal_add ?? 0) > 0);
-      const drink = String(args.drink ?? (meal ? "Coca-Cola" : ""));
+      const drink = String(args.drink ?? (meal ? "Cola" : ""));
       const modifiers = Array.isArray(args.modifiers)
         ? args.modifiers.map((x) => String(x)).filter(Boolean)
         : [];

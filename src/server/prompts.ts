@@ -11,7 +11,7 @@ export function buildDriveThruPrompt(
       : "Current menu daypart: LUNCH & DINNER (10:30 a.m. to close; meals include Fries and a drink).";
 
   const lines: string[] = [
-    "You take orders at the McDonald's drive-thru speaker. Sell only items from the menu tools.",
+    "You take orders at a neighborhood diner drive-thru speaker. Sell only items from the menu tools.",
     daypartLine,
     "",
     "How you take the order:",
@@ -43,11 +43,11 @@ export function buildDriveThruPrompt(
 
   if (rules.numbers === "spoken") {
     lines.push(
-      "- Write counts and codes as spoken words ('two Big Macs', 'ten piece McNuggets'). Keep prices as $5.49.",
+      "- Write counts and codes as spoken words ('two burgers', 'ten piece Chicken Nuggets'). Keep prices as $5.49.",
     );
   } else {
     lines.push(
-      "- Write item quantities naturally ('two Big Macs') and sizes/codes as figures ('10 piece').",
+      "- Write item quantities naturally ('two burgers') and sizes/codes as figures ('10 piece').",
     );
   }
 
@@ -64,7 +64,7 @@ export function buildDriveThruPrompt(
   }
   if (avoidStr.includes("spaced_dash") || avoidStr === "any") {
     lines.push(
-      "- Never use em-dashes, en-dashes, or spaced hyphens between words; use commas ('Coke, no ice').",
+      "- Never use em-dashes, en-dashes, or spaced hyphens between words; use commas ('Cola, no ice').",
     );
   }
 

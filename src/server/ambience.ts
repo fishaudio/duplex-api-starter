@@ -4,7 +4,7 @@
  * Why mix ambience on the backend instead of the browser?
  *  1. Works identically across WebSockets, WebRTC, and PSTN/SIP telephony trunks.
  *  2. Sidechain ducking (-10 dB when the agent speaks, 100 ms hold, 300 ms release) keeps
- *     the agent's voice crisp above the McDonald's fryer/lane background without pumping.
+ *     the agent's voice crisp above the kitchen and drive-thru lane background without pumping.
  *  3. Caller ASR never hears the ambience because only the outbound speaker path is mixed.
  */
 
