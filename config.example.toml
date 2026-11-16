@@ -16,8 +16,9 @@ token = ""
 username = ""
 password = ""
 
-# Optional Fish Voice Library model ID (`voice: { reference_id }`); leave empty for default voice
-reference_id = ""
+# Demo default: Clara. Pick a preset in the UI or use a custom Fish Voice Library ID.
+# An explicit empty string uses the service default instead of Clara.
+reference_id = "1c8ce946e6c847e6a3b32a88cce2a1e4"
 
 [vertex_ai]
 # Path to your Google Cloud Service Account JSON file with Vertex AI User permissions
