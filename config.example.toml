@@ -16,8 +16,8 @@ token = ""
 username = ""
 password = ""
 
-# Built-in Live-3 voice name ("Clara", "Nora", "Owen", "Marco", ...) or "ref:<voice_library_id>"
-default_voice = "Clara"
+# Optional Fish Voice Library model ID (`voice: { reference_id }`); leave empty for default voice
+reference_id = ""
 
 [vertex_ai]
 # Path to your Google Cloud Service Account JSON file with Vertex AI User permissions

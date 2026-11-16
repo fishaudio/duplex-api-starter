@@ -50,12 +50,7 @@ export function buildDriveThruPrompt(
     );
   }
 
-  const tagsList = Array.isArray(rules.tags) ? rules.tags : [];
-  if (tagsList.includes("dictate") || rules.tags === "on" || rules.tags === true) {
-    lines.push("- Wrap order numbers read digit-by-digit in <dictate>...</dictate>.");
-  } else {
-    lines.push("- Do not output any XML or HTML tags or angle brackets.");
-  }
+  lines.push("- Do not output any XML or HTML tags or angle brackets.");
 
   const avoidStr = Array.isArray(rules.avoid) ? rules.avoid.join(",") : String(rules.avoid ?? "any");
   if (avoidStr.includes("colon") || avoidStr === "any") {

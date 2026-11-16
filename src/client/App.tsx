@@ -32,7 +32,7 @@ export function App() {
   const [showConfigModal, setShowConfigModal] = useState<boolean>(false);
   const [showEndpointDrawer, setShowEndpointDrawer] = useState<boolean>(false);
 
-  const [voice, setVoice] = useState<string>("Clara");
+  const [referenceId, setReferenceId] = useState<string>("");
   const [geminiModel, setGeminiModel] = useState<string>("gemini-3.5-flash-lite");
   const [geminiTier, setGeminiTier] = useState<"priority" | "normal">("priority");
   const [sampleRate, setSampleRate] = useState<number>(24000);
@@ -69,7 +69,7 @@ export function App() {
     const data = (await r.json()) as MetaResponse;
     setMeta(data);
     setConfigStatus(data.configStatus);
-    setVoice(data.configStatus.defaultVoice || "Clara");
+    setReferenceId(data.configStatus.defaultReferenceId || "");
     setGeminiModel(data.configStatus.defaultModel || "gemini-3.5-flash-lite");
     setGeminiTier(data.configStatus.defaultTier || "priority");
     setAmbienceEnabled(data.configStatus.ambienceEnabled);
@@ -108,6 +108,9 @@ export function App() {
         }
       } else if (msg.kind === "session_ready") {
         setSessionId(String(msg.session_id ?? ""));
+        if (typeof msg.output_sample_rate === "number" && msg.output_sample_rate > 0) {
+          rig.setServerOutputRate(msg.output_sample_rate);
+        }
       } else if (msg.kind === "call_error") {
         setCallError(String(msg.error ?? "Call failed"));
       } else if (msg.kind === "config_required") {
@@ -196,7 +199,7 @@ export function App() {
 
     sendWsJson({
       type: "call.start",
-      voice,
+      reference_id: referenceId,
       gemini_model: geminiModel,
       gemini_tier: geminiTier,
       sample_rate: sampleRate,
@@ -321,7 +324,6 @@ default_tier = "priority"`}</pre>
             <select
               value={rig.inputDeviceId}
               onChange={(e) => rig.setInputDeviceId(e.target.value)}
-              disabled={callLive}
             >
               <option value="default">System Default Mic</option>
               {rig.devices.inputs.map((d, i) => (
@@ -337,7 +339,6 @@ default_tier = "priority"`}</pre>
             <select
               value={rig.outputDeviceId}
               onChange={(e) => rig.setOutputDeviceId(e.target.value)}
-              disabled={callLive}
             >
               <option value="default">System Default Speaker</option>
               {rig.devices.outputs.map((d, i) => (
@@ -349,14 +350,14 @@ default_tier = "priority"`}</pre>
           </div>
 
           <div className="field">
-            <label>Agent Voice (Live-3)</label>
-            <select value={voice} onChange={(e) => setVoice(e.target.value)} disabled={callLive}>
-              {(meta?.voices ?? []).map((v) => (
-                <option key={v.id} value={v.id}>
-                  {v.label}
-                </option>
-              ))}
-            </select>
+            <label>Voice Reference ID (Fish Library)</label>
+            <input
+              type="text"
+              value={referenceId}
+              onChange={(e) => setReferenceId(e.target.value)}
+              placeholder="Default voice (or reference_id)"
+              disabled={callLive}
+            />
           </div>
 
           <div className="field">
@@ -406,6 +407,15 @@ default_tier = "priority"`}</pre>
 
           <button className="btn" onClick={handleTogglePause} disabled={!callLive}>
             {paused ? "Resume Listening" : "Pause Listening"}
+          </button>
+
+          <button
+            className="btn"
+            onClick={() =>
+              void rig.testAudioHardware().catch((err) => setCallError(`Audio test failed: ${String(err)}`))
+            }
+          >
+            Test Mic &amp; Spk
           </button>
 
           <button className="btn btn-gemini" onClick={() => void handleTestGemini()} disabled={pingLoading}>

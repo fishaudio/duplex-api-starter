@@ -11,22 +11,6 @@
 
 import WebSocket from "ws";
 import { decode, encode } from "@msgpack/msgpack";
-import type { VoiceOption } from "../shared/types.ts";
-
-export const BUILTIN_VOICES: VoiceOption[] = [
-  { id: "Clara", gender: "F", label: "Clara (Female - Default)" },
-  { id: "Nora", gender: "F", label: "Nora (Female)" },
-  { id: "Owen", gender: "M", label: "Owen (Male)" },
-  { id: "Marco", gender: "M", label: "Marco (Male)" },
-  { id: "Maddie", gender: "F", label: "Maddie (Female)" },
-  { id: "Ethan", gender: "M", label: "Ethan (Male)" },
-  { id: "Tyler", gender: "M", label: "Tyler (Male)" },
-  { id: "Brianna", gender: "F", label: "Brianna (Female)" },
-  { id: "Milo", gender: "M", label: "Milo (Male)" },
-  { id: "Jonah", gender: "M", label: "Jonah (Male)" },
-  { id: "Harper", gender: "F", label: "Harper (Female)" },
-  { id: "Patricia", gender: "F", label: "Patricia (Female)" },
-];
 
 export const CLOSE_CODE_MEANINGS: Record<number, string> = {
   1000: "normal_closure",
@@ -45,7 +29,7 @@ export interface RealtimeConnectOptions {
   url: string;
   authHeader?: string;
   sampleRate: number;
-  voice: string;
+  referenceId?: string;
   noiseCancel?: boolean;
   backchannel?: boolean;
   interim?: boolean;
@@ -105,9 +89,9 @@ export class FishRealtimeClient {
       };
     }
 
-    const v = this.opts.voice.trim();
-    if (v) {
-      frame.voice = v.startsWith("ref:") ? { reference_id: v.slice(4).trim() } : v;
+    const refId = (this.opts.referenceId ?? "").trim();
+    if (refId) {
+      frame.voice = { reference_id: refId };
     }
     return frame;
   }

@@ -7,7 +7,7 @@ import { AmbienceMixer, preloadAmbienceAsset } from "./ambience.ts";
 import { GEMINI_MODELS, GeminiVoiceBrain } from "./brain.ts";
 import { buildAuthHeader, loadAndValidateConfig } from "./config.ts";
 import { DriveThruOrderState, MENU_CATALOG } from "./driveThru.ts";
-import { BUILTIN_VOICES, FishRealtimeClient } from "./fishRealtime.ts";
+import { FishRealtimeClient } from "./fishRealtime.ts";
 
 const MIME_TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -45,7 +45,6 @@ export async function createStarterServer(configOverridePath?: string): Promise<
     if (req.method === "GET" && url.pathname === "/api/meta") {
       const { validation } = loadAndValidateConfig(configOverridePath);
       const body: MetaResponse = {
-        voices: BUILTIN_VOICES,
         models: GEMINI_MODELS,
         menu: MENU_CATALOG,
         configStatus: validation,
@@ -243,7 +242,10 @@ export async function createStarterServer(configOverridePath?: string): Promise<
             url: endpoint,
             authHeader,
             sampleRate,
-            voice: String(cmd.voice ?? config.fish_realtime.default_voice),
+            referenceId:
+              cmd.reference_id !== undefined
+                ? String(cmd.reference_id).trim()
+                : config.fish_realtime.reference_id,
           },
           handleRealtimeEvent,
           (agentPcm) => {

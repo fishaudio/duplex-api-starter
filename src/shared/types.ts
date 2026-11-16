@@ -1,9 +1,3 @@
-export interface VoiceOption {
-  id: string;
-  gender: "F" | "M";
-  label: string;
-}
-
 export interface GeminiModelOption {
   id: string;
   label: string;
@@ -28,7 +22,7 @@ export interface ConfigValidation {
   missingFields: string[];
   endpoint: string;
   authScheme: AuthScheme;
-  defaultVoice: string;
+  defaultReferenceId: string;
   defaultModel: string;
   defaultTier: "priority" | "normal";
   ambienceEnabled: boolean;
@@ -36,7 +30,6 @@ export interface ConfigValidation {
 }
 
 export interface MetaResponse {
-  voices: VoiceOption[];
   models: GeminiModelOption[];
   menu: MenuItem[];
   configStatus: ConfigValidation;
@@ -88,7 +81,6 @@ export interface GeminiPingResult {
 
 export interface TextRules {
   numbers?: "spoken" | "written" | string;
-  tags?: string[] | string | boolean;
   ack_in_t?: boolean;
   avoid?: string[] | string;
 }

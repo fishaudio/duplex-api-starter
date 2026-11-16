@@ -13,7 +13,7 @@ export interface AppConfig {
     token: string;
     username: string;
     password: string;
-    default_voice: string;
+    reference_id: string;
   };
   vertex_ai: {
     credentials_path: string;
@@ -35,7 +35,7 @@ const DEFAULT_CONFIG: AppConfig = {
     token: "",
     username: "",
     password: "",
-    default_voice: "Clara",
+    reference_id: "",
   },
   vertex_ai: {
     credentials_path: "",
@@ -76,7 +76,7 @@ export function loadAndValidateConfig(overridePath?: string): {
           missingFields: [`Invalid TOML syntax in config.toml: ${String(err)}`],
           endpoint: DEFAULT_CONFIG.fish_realtime.endpoint,
           authScheme: DEFAULT_CONFIG.fish_realtime.auth_scheme,
-          defaultVoice: DEFAULT_CONFIG.fish_realtime.default_voice,
+          defaultReferenceId: DEFAULT_CONFIG.fish_realtime.reference_id,
           defaultModel: DEFAULT_CONFIG.vertex_ai.default_model,
           defaultTier: DEFAULT_CONFIG.vertex_ai.default_tier,
           ambienceEnabled: DEFAULT_CONFIG.ambience.enabled,
@@ -104,7 +104,7 @@ export function loadAndValidateConfig(overridePath?: string): {
       token: String(fr.token ?? "").trim(),
       username: String(fr.username ?? "").trim(),
       password: String(fr.password ?? "").trim(),
-      default_voice: String(fr.default_voice ?? "Clara").trim() || "Clara",
+      reference_id: String(fr.reference_id ?? "").trim(),
     },
     vertex_ai: {
       credentials_path: String(vx.credentials_path ?? "").trim(),
@@ -150,7 +150,7 @@ export function loadAndValidateConfig(overridePath?: string): {
       missingFields,
       endpoint: config.fish_realtime.endpoint,
       authScheme: config.fish_realtime.auth_scheme,
-      defaultVoice: config.fish_realtime.default_voice,
+      defaultReferenceId: config.fish_realtime.reference_id,
       defaultModel: config.vertex_ai.default_model,
       defaultTier: config.vertex_ai.default_tier,
       ambienceEnabled: config.ambience.enabled,

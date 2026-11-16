@@ -149,7 +149,7 @@ describe("Full-Stack TypeScript Realtime Agent Starter", () => {
           const timer = setTimeout(() => reject(new Error(`Timed out; seen=${seenEvents.join(",")}`)), 20_000);
 
           bws.on("open", () => {
-            bws.send(JSON.stringify({ type: "call.start", voice: "Clara", sample_rate: 24000 }));
+            bws.send(JSON.stringify({ type: "call.start", sample_rate: 24000 }));
           });
 
           bws.on("message", (data, isBinary) => {
