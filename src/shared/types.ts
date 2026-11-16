@@ -1,6 +1,6 @@
 export interface VoiceOption {
   id: string;
-  gender: string;
+  gender: "F" | "M";
   label: string;
 }
 
@@ -16,15 +16,30 @@ export interface MenuItem {
   daypart: "regular" | "breakfast" | "all";
   price: number;
   meal_add?: number;
+  sizes?: Record<string, number>;
+}
+
+export type AuthScheme = "bearer" | "basic";
+
+export interface ConfigValidation {
+  ready: boolean;
+  configPath: string;
+  configFileExists: boolean;
+  missingFields: string[];
+  endpoint: string;
+  authScheme: AuthScheme;
+  defaultVoice: string;
+  defaultModel: string;
+  defaultTier: "priority" | "normal";
+  ambienceEnabled: boolean;
+  ambienceLevelDb: number;
 }
 
 export interface MetaResponse {
   voices: VoiceOption[];
   models: GeminiModelOption[];
   menu: MenuItem[];
-  default_realtime_url: string;
-  has_fish_api_key: boolean;
-  has_vertex_credentials: boolean;
+  configStatus: ConfigValidation;
 }
 
 export interface OrderLine {
@@ -64,9 +79,16 @@ export interface GeminiPingResult {
   error?: string;
   project_id?: string;
   model?: string;
-  tier?: string;
+  tier?: "priority" | "normal";
   traffic_type?: string;
   ttft_ms?: number;
   total_ms?: number;
   sample_reply?: string;
+}
+
+export interface TextRules {
+  numbers?: "spoken" | "written" | string;
+  tags?: string[] | string | boolean;
+  ack_in_t?: boolean;
+  avoid?: string[] | string;
 }

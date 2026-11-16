@@ -1,10 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import {
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type {
+  AuthScheme,
+  ConfigValidation,
   GeminiPingResult,
   InspectorEvent,
   MetaResponse,
   OrderSnapshot,
-} from "./types";
+} from "../shared/types";
 import { useAudioRig } from "./useAudioRig";
 
 type FilterTab = "all" | "turns" | "replies" | "llm" | "tools" | "transcript";
@@ -26,21 +28,30 @@ function classifyEventRow(type: string): string {
 
 export function App() {
   const [meta, setMeta] = useState<MetaResponse | null>(null);
+  const [configStatus, setConfigStatus] = useState<ConfigValidation | null>(null);
+  const [showConfigModal, setShowConfigModal] = useState<boolean>(false);
+  const [showEndpointDrawer, setShowEndpointDrawer] = useState<boolean>(false);
+
   const [voice, setVoice] = useState<string>("Clara");
   const [geminiModel, setGeminiModel] = useState<string>("gemini-3.5-flash-lite");
   const [geminiTier, setGeminiTier] = useState<"priority" | "normal">("priority");
   const [sampleRate, setSampleRate] = useState<number>(24000);
-  const [fishApiKey, setFishApiKey] = useState<string>("");
-  const [fishUrl, setFishUrl] = useState<string>("wss://api.fish.audio/v1/realtime/converse");
+
+  // Optional runtime Endpoint & Auth override fields (defaulting from config.toml)
+  const [endpointOverride, setEndpointOverride] = useState<string>("");
+  const [authScheme, setAuthScheme] = useState<AuthScheme>("bearer");
+  const [bearerToken, setBearerToken] = useState<string>("");
+  const [basicUser, setBasicUser] = useState<string>("");
+  const [basicPass, setBasicPass] = useState<string>("");
 
   const [ambienceEnabled, setAmbienceEnabled] = useState<boolean>(true);
   const [ambienceDb, setAmbienceDb] = useState<number>(0);
-  const [eager, setEager] = useState<boolean>(true);
   const [rawAudio, setRawAudio] = useState<boolean>(false);
 
   const [callLive, setCallLive] = useState<boolean>(false);
   const [paused, setPaused] = useState<boolean>(false);
   const [sessionId, setSessionId] = useState<string>("");
+  const [callError, setCallError] = useState<string | null>(null);
   const [order, setOrder] = useState<OrderSnapshot | null>(null);
   const [events, setEvents] = useState<InspectorEvent[]>([]);
   const [filter, setFilter] = useState<FilterTab>("all");
@@ -53,16 +64,27 @@ export function App() {
 
   const rig = useAudioRig();
 
-  // Fetch initial metadata + open control WebSocket
+  const fetchMeta = useCallback(async () => {
+    const r = await fetch("/api/meta");
+    const data = (await r.json()) as MetaResponse;
+    setMeta(data);
+    setConfigStatus(data.configStatus);
+    setVoice(data.configStatus.defaultVoice || "Clara");
+    setGeminiModel(data.configStatus.defaultModel || "gemini-3.5-flash-lite");
+    setGeminiTier(data.configStatus.defaultTier || "priority");
+    setAmbienceEnabled(data.configStatus.ambienceEnabled);
+    setAmbienceLevelSafe(data.configStatus.ambienceLevelDb);
+    setEndpointOverride(data.configStatus.endpoint);
+    setAuthScheme(data.configStatus.authScheme);
+    setShowConfigModal(!data.configStatus.ready);
+  }, []);
+
+  function setAmbienceLevelSafe(val: number) {
+    if (!Number.isNaN(val)) setAmbienceDb(val);
+  }
+
   useEffect(() => {
-    fetch("/api/meta")
-      .then((r) => r.json())
-      .then((data: MetaResponse) => {
-        setMeta(data);
-        if (data.default_realtime_url) setFishUrl(data.default_realtime_url);
-        if (data.models.length > 0) setGeminiModel(data.models[0].id);
-      })
-      .catch(console.error);
+    void fetchMeta().catch(console.error);
 
     const proto = window.location.protocol === "https:" ? "wss" : "ws";
     const ws = new WebSocket(`${proto}://${window.location.host}/ws`);
@@ -74,20 +96,28 @@ export function App() {
         rig.enqueueSpeakerPcm(ev.data);
         return;
       }
-      const msg = JSON.parse(ev.data as string);
+      const msg = JSON.parse(ev.data as string) as Record<string, unknown>;
       if (msg.kind === "order") {
         setOrder(msg.order as OrderSnapshot);
       } else if (msg.kind === "call_state") {
-        setCallLive(Boolean(msg.live));
-        if (!msg.live) {
+        const isLive = Boolean(msg.live);
+        setCallLive(isLive);
+        if (!isLive) {
           setPaused(false);
           void rig.stopRig();
         }
       } else if (msg.kind === "session_ready") {
-        setSessionId(String(msg.session_id || ""));
+        setSessionId(String(msg.session_id ?? ""));
+      } else if (msg.kind === "call_error") {
+        setCallError(String(msg.error ?? "Call failed"));
+      } else if (msg.kind === "config_required") {
+        const status = msg.configStatus as ConfigValidation;
+        setConfigStatus(status);
+        setShowConfigModal(true);
+        void rig.stopRig();
       } else if (msg.kind === "event") {
         const payload = msg.payload as Record<string, unknown>;
-        const etype = String(payload.type || "unknown");
+        const etype = String(payload.type ?? "unknown");
         if (etype === "reply.interrupted" && payload.final === false) {
           rig.flushSpeaker();
         }
@@ -124,7 +154,6 @@ export function App() {
     }
   };
 
-  // Push live config updates (ambience dB, Gemini model/tier, raw audio logging) to backend immediately
   useEffect(() => {
     sendWsJson({
       type: "config.live",
@@ -144,6 +173,16 @@ export function App() {
       return;
     }
 
+    setCallError(null);
+    // Check config readiness unless user typed runtime credentials in drawer
+    const hasRuntimeAuth =
+      (authScheme === "bearer" && bearerToken.trim().length > 0) ||
+      (authScheme === "basic" && basicUser.trim().length > 0 && basicPass.trim().length > 0);
+    if (configStatus && !configStatus.ready && !hasRuntimeAuth) {
+      setShowConfigModal(true);
+      return;
+    }
+
     try {
       await rig.startRig(sampleRate, (pcmBuf) => {
         if (wsRef.current?.readyState === WebSocket.OPEN) {
@@ -151,7 +190,7 @@ export function App() {
         }
       });
     } catch (err) {
-      alert(`Microphone permission / device error: ${String(err)}`);
+      setCallError(`Microphone permission / device error: ${String(err)}`);
       return;
     }
 
@@ -161,13 +200,14 @@ export function App() {
       gemini_model: geminiModel,
       gemini_tier: geminiTier,
       sample_rate: sampleRate,
-      fish_api_key: fishApiKey,
-      fish_url: fishUrl,
+      endpoint: endpointOverride,
+      auth_scheme: authScheme,
+      token: bearerToken,
+      username: basicUser,
+      password: basicPass,
       ambience_enabled: ambienceEnabled,
       ambience_db: ambienceDb,
-      eager,
       raw_audio: rawAudio,
-      daypart: order?.daypart ?? "regular",
     });
   };
 
@@ -192,10 +232,6 @@ export function App() {
     } finally {
       setPingLoading(false);
     }
-  };
-
-  const handleDaypartSwitch = (daypart: "regular" | "breakfast") => {
-    sendWsJson({ type: "order.daypart", daypart });
   };
 
   const filteredEvents = useMemo(() => {
@@ -225,6 +261,54 @@ export function App() {
 
   return (
     <div className="app-shell">
+      {/* Automatic Modal when config.toml is missing or incomplete */}
+      {showConfigModal && configStatus && (
+        <div className="modal-backdrop">
+          <div className="modal-card">
+            <h2>Update config.toml First</h2>
+            <div style={{ fontSize: 13, color: "var(--muted)", lineHeight: 1.5 }}>
+              Required credentials or endpoint settings are missing in{" "}
+              <code>{configStatus.configPath}</code>. Copy <code>config.example.toml</code> to{" "}
+              <code>config.toml</code> and fill in the fields below:
+            </div>
+
+            {configStatus.missingFields.length > 0 && (
+              <div className="modal-missing">
+                <strong>Missing / Incomplete Fields:</strong>
+                <ul style={{ margin: "6px 0 0 18px", padding: 0 }}>
+                  {configStatus.missingFields.map((f, i) => (
+                    <li key={i}>{f}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <pre className="modal-code">{`# cp config.example.toml config.toml
+
+[fish_realtime]
+endpoint = "wss://api.fish.audio/v1/realtime/converse"
+auth_scheme = "bearer"     # or "basic"
+token = "your_fish_api_key"
+# username = ""            # used when auth_scheme = "basic"
+# password = ""
+
+[vertex_ai]
+credentials_path = "/path/to/vertex-service-account.json"
+location = "global"
+default_tier = "priority"`}</pre>
+
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+              <button className="btn" onClick={() => setShowConfigModal(false)}>
+                Inspect UI Anyway
+              </button>
+              <button className="btn btn-gemini" onClick={() => void fetchMeta()}>
+                Re-check config.toml
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <header className="topbar">
         <div className="topbar-row">
           <div className="brand">
@@ -328,6 +412,10 @@ export function App() {
             {pingLoading ? "Testing..." : "Test Gemini Tier"}
           </button>
 
+          <button className="btn" onClick={() => setShowEndpointDrawer((v) => !v)} disabled={callLive}>
+            Endpoint &amp; Auth ({authScheme})
+          </button>
+
           <div className="pill-group">
             <label style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer" }}>
               <input
@@ -347,14 +435,12 @@ export function App() {
               disabled={!ambienceEnabled}
               style={{ width: 75 }}
             />
-            <span style={{ color: "var(--muted)", minWidth: 40 }}>{ambienceDb >= 0 ? `+${ambienceDb}` : ambienceDb} dB</span>
+            <span style={{ color: "var(--muted)", minWidth: 40 }}>
+              {ambienceDb >= 0 ? `+${ambienceDb}` : ambienceDb} dB
+            </span>
           </div>
 
           <div className="pill-group">
-            <label style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}>
-              <input type="checkbox" checked={eager} onChange={(e) => setEager(e.target.checked)} disabled={callLive} />
-              Eager Turns
-            </label>
             <label style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}>
               <input
                 type="checkbox"
@@ -365,16 +451,6 @@ export function App() {
               Speaker AEC
             </label>
           </div>
-
-          {!meta?.has_fish_api_key && (
-            <input
-              type="password"
-              placeholder="FISH_API_KEY (or set in .env)"
-              value={fishApiKey}
-              onChange={(e) => setFishApiKey(e.target.value)}
-              disabled={callLive}
-            />
-          )}
 
           <div className="pill-group" style={{ marginLeft: "auto" }}>
             <span>Mic</span>
@@ -388,7 +464,71 @@ export function App() {
             <span style={{ color: "var(--muted)" }}>Buf {rig.bufferedMs}ms</span>
           </div>
         </div>
+
+        {showEndpointDrawer && (
+          <div className="topbar-row" style={{ paddingTop: 4, borderTop: "1px dashed var(--border)" }}>
+            <div className="field" style={{ flex: 1 }}>
+              <label>Realtime WS Endpoint (defaults from config.toml)</label>
+              <input
+                type="text"
+                value={endpointOverride}
+                onChange={(e) => setEndpointOverride(e.target.value)}
+                placeholder="wss://api.fish.audio/v1/realtime/converse"
+              />
+            </div>
+            <div className="field">
+              <label>Auth Scheme</label>
+              <select value={authScheme} onChange={(e) => setAuthScheme(e.target.value as AuthScheme)}>
+                <option value="bearer">Bearer Token</option>
+                <option value="basic">Basic Auth</option>
+              </select>
+            </div>
+            {authScheme === "bearer" ? (
+              <div className="field">
+                <label>Bearer Token Override</label>
+                <input
+                  type="password"
+                  value={bearerToken}
+                  onChange={(e) => setBearerToken(e.target.value)}
+                  placeholder="Leave blank to use config.toml"
+                />
+              </div>
+            ) : (
+              <>
+                <div className="field">
+                  <label>Basic Username Override</label>
+                  <input
+                    type="text"
+                    value={basicUser}
+                    onChange={(e) => setBasicUser(e.target.value)}
+                    placeholder="Leave blank for config.toml"
+                  />
+                </div>
+                <div className="field">
+                  <label>Basic Password Override</label>
+                  <input
+                    type="password"
+                    value={basicPass}
+                    onChange={(e) => setBasicPass(e.target.value)}
+                    placeholder="Leave blank for config.toml"
+                  />
+                </div>
+              </>
+            )}
+          </div>
+        )}
       </header>
+
+      {callError && (
+        <div className="error-banner">
+          <span>
+            <strong>Connection Error:</strong> {callError}
+          </span>
+          <button className="tab-btn" onClick={() => setCallError(null)}>
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {pingResult && (
         <div className="ping-banner">
@@ -409,14 +549,13 @@ export function App() {
       )}
 
       <main className="workspace">
-        {/* Left Pane: McDonald's POS Order Confirmation Screen + Menu */}
         <section className="pos-column">
           <div className="pos-screen">
             <div className="pos-header">
               <div>
                 <div className="pos-title">ORDER #{order?.order_number ?? 142}</div>
                 <div style={{ fontSize: 11, color: "var(--muted)" }}>
-                  {sessionId ? `Live Session: ${sessionId}` : "Ready at Speaker Post 1"}
+                  {sessionId ? `Live Session: ${sessionId}` : "Ready at Speaker Post 1 (Eager Mode Active)"}
                 </div>
               </div>
               <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
@@ -472,17 +611,19 @@ export function App() {
           </div>
 
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <strong style={{ fontSize: 13 }}>Menu Board ({activeDaypart === "breakfast" ? "Breakfast" : "Lunch & Dinner"})</strong>
+            <strong style={{ fontSize: 13 }}>
+              Menu Board ({activeDaypart === "breakfast" ? "Breakfast" : "Lunch & Dinner"})
+            </strong>
             <div style={{ display: "flex", gap: 6 }}>
               <button
                 className={`tab-btn ${activeDaypart === "regular" ? "active" : ""}`}
-                onClick={() => handleDaypartSwitch("regular")}
+                onClick={() => sendWsJson({ type: "order.daypart", daypart: "regular" })}
               >
-                Lunch & Dinner
+                Lunch &amp; Dinner
               </button>
               <button
                 className={`tab-btn ${activeDaypart === "breakfast" ? "active" : ""}`}
-                onClick={() => handleDaypartSwitch("breakfast")}
+                onClick={() => sendWsJson({ type: "order.daypart", daypart: "breakfast" })}
               >
                 Breakfast
               </button>
@@ -502,7 +643,6 @@ export function App() {
           </div>
         </section>
 
-        {/* Right Pane: Real-time Protocol, LLM & Tool Event Inspector */}
         <section className="inspector-column">
           <div className="inspector-bar">
             <div style={{ display: "flex", gap: 4 }}>
@@ -517,7 +657,15 @@ export function App() {
               ))}
             </div>
             <div style={{ display: "flex", gap: 10, alignItems: "center", fontSize: 11.5 }}>
-              <label style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer", color: "var(--muted)" }}>
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 4,
+                  cursor: "pointer",
+                  color: "var(--muted)",
+                }}
+              >
                 <input
                   type="checkbox"
                   checked={rawAudio}
@@ -534,8 +682,9 @@ export function App() {
           <div className="event-list">
             {filteredEvents.length === 0 ? (
               <div style={{ color: "var(--muted)", padding: 24, textAlign: "center" }}>
-                All Fish Realtime frames (<code>session.*</code>, <code>turn.*</code>, <code>reply.*</code>),
-                Vertex AI Gemini hops (<code>ON_DEMAND_PRIORITY</code>), and Drive-Thru tool calls will stream here live.
+                All Fish Realtime frames (<code>session.*</code>, <code>turn.eager</code>,{" "}
+                <code>turn.committed</code>, <code>reply.*</code>), Vertex AI Gemini hops (
+                <code>ON_DEMAND_PRIORITY</code>), and Drive-Thru tool calls will stream here live.
               </div>
             ) : (
               filteredEvents.map((ev) => {

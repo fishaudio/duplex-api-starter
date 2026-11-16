@@ -1,21 +1,14 @@
-# Secrets & local environment
+# Local config & secrets (copy config.example.toml -> config.toml)
+config.toml
 .env
 .env.*
-!.env.example
 *credentials*.json
 *service-account*.json
 
-# Python
-.venv/
-__pycache__/
-*.py[cod]
-.pytest_cache/
-*.egg-info/
-
-# Frontend
-web/node_modules/
-web/dist/
+# Node / Build
+node_modules/
+dist/
+*.tsbuildinfo
 
 # OS
 .DS_Store
-*.tsbuildinfo

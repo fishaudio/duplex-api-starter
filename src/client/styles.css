@@ -394,3 +394,67 @@ input[type="password"] {
   justify-content: space-between;
   align-items: center;
 }
+
+.error-banner {
+  background: rgba(218, 41, 28, 0.18);
+  border-bottom: 1px solid var(--red);
+  color: #fecaca;
+  padding: 7px 14px;
+  font-size: 12.5px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+/* Missing config.toml Modal */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 7, 12, 0.82);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.modal-card {
+  background: var(--panel);
+  border: 1px solid #3b4764;
+  border-radius: 12px;
+  max-width: 620px;
+  width: 92%;
+  padding: 22px 24px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.modal-card h2 {
+  margin: 0;
+  font-size: 18px;
+  color: var(--gold);
+}
+
+.modal-missing {
+  background: rgba(218, 41, 28, 0.12);
+  border: 1px solid rgba(218, 41, 28, 0.45);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 12.5px;
+  color: #fecaca;
+}
+
+.modal-code {
+  background: #090b10;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11.5px;
+  color: #cbd5e1;
+  overflow-x: auto;
+  margin: 0;
+}
+
