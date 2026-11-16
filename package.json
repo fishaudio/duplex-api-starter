@@ -16,7 +16,6 @@
   "dependencies": {
     "@google/genai": "^1.0.0",
     "@msgpack/msgpack": "^3.1.1",
-    "google-auth-library": "^9.15.1",
     "mpg123-decoder": "^0.4.12",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
@@ -33,6 +32,6 @@
     "tsx": "^4.19.3",
     "typescript": "~5.7.3",
     "vite": "^6.2.0",
-    "vitest": "^3.0.7"
+    "vitest": "^5.1.0"
   }
 }

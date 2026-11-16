@@ -9,9 +9,13 @@
  *     park at `commitGate` until `turn.committed` approves `eager_id`—eliminating phantom POS items!
  *  3. Zero-dead-air tool speech (`say` + `flush: true`): flushes a short spoken phrase before tool
  *     execution and continues Hop 2 on the SAME `reply_id`.
- *  4. Barge-in alignment: appends ONLY `reply.done.heard_text` into conversation history.
- *  5. Vertex AI Priority PayGo: sets `X-Vertex-AI-LLM-Shared-Request-Type: priority`, uses
- *     `ThinkingLevel.LOW`, and preserves raw `Part[]` (`thoughtSignature`) across tool hops.
+ *  4. Barge-in alignment & false-barge recovery:
+ *     - Appends ONLY `reply.done.heard_text` into conversation history.
+ *     - `turn.committed (kind: "aside")` never cancels an already-committed active reply.
+ *     - If caller barge-in / echo interrupts a reply and then resolves as `turn.dropped`
+ *       (`echo`, `filler`, `nonuser`, `no_commit`) or `aside`, automatically resumes the unspoken tail.
+ *  5. Vertex AI Priority PayGo: sets `X-Vertex-AI-LLM-Shared-Request-Type: priority`, uses fast
+ *     thinking budget/level, and preserves raw `Part[]` (`thoughtSignature`) across tool hops.
  */
 
 import crypto from "node:crypto";
@@ -30,6 +34,25 @@ export const GEMINI_MODELS: GeminiModelOption[] = [
   { id: "gemini-3-flash-preview", label: "Gemini 3 Flash Preview" },
   { id: "gemini-3.1-flash-lite", label: "Gemini 3.1 Flash-Lite" },
 ];
+
+function getThinkingConfig(model: string): { thinkingBudget?: number; thinkingLevel?: ThinkingLevel } {
+  // gemini-3.8 / 3.5 Flash achieve ~1.5-1.7s TTFT with thinkingBudget=64 while keeping clean tool calls
+  if (model.startsWith("gemini-3.8") || model.startsWith("gemini-3.5")) {
+    return { thinkingBudget: 64 };
+  }
+  return { thinkingLevel: ThinkingLevel.LOW };
+}
+
+function joinSpokenChunks(head: string, tail: string): string {
+  const a = head.trimEnd();
+  const b = tail.trimStart();
+  if (!a) return tail.trim();
+  if (!b) return head.trim();
+  if (/^\s/.test(tail) || /\s$/.test(head) || /^[,.;:!?']/.test(b)) {
+    return `${a}${tail.startsWith(" ") || /^[,.;:!?']/.test(b) ? "" : " "}${b}`.trim();
+  }
+  return `${a} ${b}`.trim();
+}
 
 class AsyncGate {
   private opened = false;
@@ -57,8 +80,18 @@ interface InFlightRun {
   turnId: string;
   eagerId: string | null;
   cancelled: boolean;
+  wireStopped: boolean;
+  firstSent: boolean;
+  unsentTail: string;
   commitGate: AsyncGate;
   stagedHistory: Content[];
+}
+
+interface RecoverableCut {
+  text: string;
+  createdAt: number;
+  sourceRun: InFlightRun | null;
+  hangupReason?: string;
 }
 
 export interface BrainOptions {
@@ -84,6 +117,8 @@ export class GeminiVoiceBrain {
   private active: InFlightRun | null = null;
   private replyCounter = 0;
   private pendingHangup: { replyId: string; reason: string } | null = null;
+  private recoverableCut: RecoverableCut | null = null;
+  private partialRetriedReplies = new Set<string>();
 
   private readonly onEvent?: (channel: string, payload: Record<string, unknown>) => void | Promise<void>;
   private readonly onOrderUpdate?: (snapshot: OrderSnapshot) => void | Promise<void>;
@@ -125,10 +160,17 @@ export class GeminiVoiceBrain {
     if (this.onEvent) await this.onEvent(channel, payload);
   }
 
+  private nextReplyId(prefix = "r"): string {
+    this.replyCounter += 1;
+    return `${prefix}-${this.replyCounter}-${crypto.randomBytes(2).toString("hex")}`;
+  }
+
   public resetCall(): void {
     this.history = [];
     this.textRules = {};
     this.pendingHangup = null;
+    this.recoverableCut = null;
+    this.partialRetriedReplies.clear();
     if (this.active) {
       this.active.cancelled = true;
       this.active.commitGate.open();
@@ -151,7 +193,7 @@ export class GeminiVoiceBrain {
         systemInstruction: buildDriveThruPrompt(this.textRules, this.orderState.daypart),
         temperature: 0.4,
         maxOutputTokens: 512,
-        thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+        thinkingConfig: getThinkingConfig(this.model),
       },
     });
 
@@ -189,13 +231,23 @@ export class GeminiVoiceBrain {
       return;
     }
 
+    if (etype === "reply.interrupted") {
+      const replyId = String(event.reply_id ?? "");
+      if (this.active && this.active.replyId === replyId) {
+        // Stop transmitting on this dead reply_id, while keeping LLM stream alive in case
+        // the interruption turns out to be echo/noise (`turn.dropped`)
+        this.active.wireStopped = true;
+      }
+      return;
+    }
+
     if (etype === "turn.eager") {
       const eagerId = String(event.eager_id ?? "");
       const turnId = String(event.turn_id ?? "");
       const text = String(event.text ?? "").trim();
       if (!text || !eagerId) return;
 
-      this.cancelActive(rt, true);
+      this.cancelActive(rt, Boolean(this.active && !this.active.wireStopped));
       this.launchReply(rt, { callerText: text, turnId, eagerId });
       return;
     }
@@ -208,7 +260,7 @@ export class GeminiVoiceBrain {
           eager_id: eagerId,
           reply_id: this.active.replyId,
         });
-        this.cancelActive(rt, true);
+        this.cancelActive(rt, !this.active.wireStopped);
       }
       return;
     }
@@ -221,11 +273,24 @@ export class GeminiVoiceBrain {
       if (!text) return;
 
       if (kind === "aside") {
-        this.cancelActive(rt, true);
+        // Spec: an `aside` stops nothing itself—never cancel an already-committed reply!
+        if (this.active && !this.active.commitGate.isOpen) {
+          this.cancelActive(rt, !this.active.wireStopped);
+        }
         this.history.push({ role: "user", parts: [{ text: `[Guest spoke to passenger: ${text}]` }] });
+        if (
+          (!this.active || this.active.wireStopped) &&
+          this.recoverableCut &&
+          Date.now() - this.recoverableCut.createdAt < 6000 &&
+          rt.isLive
+        ) {
+          await this.resendRecoverableCut(rt, "aside");
+        }
         return;
       }
 
+      // Real caller turn -> discard any pending cut-recovery from the prior turn
+      this.recoverableCut = null;
       this.history.push({ role: "user", parts: [{ text }] });
 
       if (approvedEager && this.active && this.active.eagerId === approvedEager && !this.active.cancelled) {
@@ -243,7 +308,7 @@ export class GeminiVoiceBrain {
         return;
       }
 
-      this.cancelActive(rt, true);
+      this.cancelActive(rt, Boolean(this.active && !this.active.wireStopped));
       this.launchReply(rt, { callerText: null, turnId, eagerId: null });
       return;
     }
@@ -253,6 +318,8 @@ export class GeminiVoiceBrain {
       const heard = String(event.heard_text ?? "").trim();
       const unheard = String(event.unheard_text ?? "").trim();
       const status = String(event.status ?? "");
+      const by = event.by ? String(event.by) : "";
+
       if (heard) {
         this.history.push({ role: "model", parts: [{ text: heard }] });
       }
@@ -263,20 +330,129 @@ export class GeminiVoiceBrain {
         });
       }
 
-      // When `end_call` was invoked on this reply, wait ~500 ms for browser jitter buffer playout
-      // to finish speaking the farewell words, then hang up cleanly (unless guest barged in!).
-      if (this.pendingHangup && this.pendingHangup.replyId === replyId) {
-        const hangup = this.pendingHangup;
+      const matchingRun = this.active && this.active.replyId === replyId ? this.active : null;
+      let extraTail = "";
+      if (matchingRun) {
+        matchingRun.wireStopped = true;
+        extraTail = matchingRun.unsentTail;
+      }
+
+      const hangupForThisReply =
+        this.pendingHangup && this.pendingHangup.replyId === replyId ? this.pendingHangup : null;
+      if (hangupForThisReply) {
         this.pendingHangup = null;
-        if (status !== "interrupted") {
-          setTimeout(() => {
-            if (rt.isLive && this.onHangupRequested) {
-              void this.onHangupRequested(hangup.reason);
-            }
-          }, 500);
+      }
+
+      const remainder = joinSpokenChunks(unheard, extraTail);
+
+      if (
+        status === "partial" &&
+        remainder &&
+        rt.isLive &&
+        !this.partialRetriedReplies.has(replyId)
+      ) {
+        const retryId = this.nextReplyId("r-cont");
+        this.partialRetriedReplies.add(retryId);
+        if (hangupForThisReply) {
+          this.pendingHangup = { replyId: retryId, reason: hangupForThisReply.reason };
         }
+        rt.replyText(retryId, remainder, { last: true });
+        await this.emit("LLM->", {
+          type: "llm.resumed_after_partial",
+          reply_id: retryId,
+          reason: String(event.reason ?? "partial"),
+          text: remainder,
+        });
+        return;
+      }
+
+      if (status === "interrupted" && by === "caller" && (remainder || matchingRun)) {
+        this.recoverableCut = {
+          text: remainder,
+          createdAt: Date.now(),
+          sourceRun: matchingRun,
+          hangupReason: hangupForThisReply?.reason,
+        };
+        return;
+      }
+
+      if (hangupForThisReply && status !== "interrupted") {
+        setTimeout(() => {
+          if (rt.isLive && this.onHangupRequested) {
+            void this.onHangupRequested(hangupForThisReply.reason);
+          }
+        }, 500);
+      }
+      return;
+    }
+
+    if (etype === "turn.dropped") {
+      const reason = String(event.reason ?? "dropped");
+      if (
+        this.recoverableCut &&
+        Date.now() - this.recoverableCut.createdAt < 6000 &&
+        rt.isLive
+      ) {
+        if (this.active && !this.active.commitGate.isOpen) {
+          // Drop any unapproved speculative run sparked by the false-barge sound
+          this.cancelActive(rt, !this.active.wireStopped);
+        }
+        await this.resendRecoverableCut(rt, reason);
       }
     }
+  }
+
+  private async resendRecoverableCut(rt: FishRealtimeClient, reason: string): Promise<void> {
+    const cut = this.recoverableCut;
+    this.recoverableCut = null;
+    if (!cut || !rt.isLive) return;
+
+    const newReplyId = this.nextReplyId("r-resume");
+
+    // Case 1: The LLM stream for that reply is STILL generating tokens -> seamlessly redirect it!
+    if (cut.sourceRun && this.active === cut.sourceRun && !cut.sourceRun.cancelled) {
+      const oldId = cut.sourceRun.replyId;
+      cut.sourceRun.replyId = newReplyId;
+      cut.sourceRun.wireStopped = false;
+      cut.sourceRun.unsentTail = "";
+      cut.sourceRun.firstSent = true;
+      cut.sourceRun.commitGate.open();
+
+      if (cut.hangupReason) {
+        this.pendingHangup = { replyId: newReplyId, reason: cut.hangupReason };
+      } else if (this.pendingHangup && this.pendingHangup.replyId === oldId) {
+        this.pendingHangup.replyId = newReplyId;
+      }
+
+      if (cut.text) {
+        rt.replyText(newReplyId, `${cut.text} `, { last: false });
+      } else {
+        cut.sourceRun.firstSent = false;
+      }
+
+      await this.emit("LLM->", {
+        type: "llm.resumed_after_false_barge",
+        reply_id: newReplyId,
+        reason,
+        text: cut.text,
+        streaming_continued: true,
+      });
+      return;
+    }
+
+    // Case 2: The LLM stream already finished -> replay the complete unspoken remainder at once
+    if (!cut.text) return;
+    if (cut.hangupReason) {
+      this.pendingHangup = { replyId: newReplyId, reason: cut.hangupReason };
+    }
+    rt.replyText(newReplyId, cut.text, { last: true });
+    await this.emit("LLM->", {
+      type: "llm.resumed_after_false_barge",
+      reply_id: newReplyId,
+      reason,
+      text: cut.text,
+      streaming_continued: false,
+    });
   }
 
   private cancelActive(rt: FishRealtimeClient, sendCancel: boolean): void {
@@ -284,6 +460,9 @@ export class GeminiVoiceBrain {
     if (!cur) return;
     cur.cancelled = true;
     cur.commitGate.open();
+    if (this.recoverableCut?.sourceRun === cur) {
+      this.recoverableCut.sourceRun = null;
+    }
     if (sendCancel && rt.isLive) {
       rt.replyCancel(cur.replyId);
     }
@@ -294,8 +473,7 @@ export class GeminiVoiceBrain {
     rt: FishRealtimeClient,
     params: { callerText: string | null; turnId: string; eagerId: string | null },
   ): void {
-    this.replyCounter += 1;
-    const replyId = `r-${this.replyCounter}-${crypto.randomBytes(2).toString("hex")}`;
+    const replyId = this.nextReplyId("r");
     const gate = new AsyncGate();
     if (!params.eagerId) gate.open();
 
@@ -304,6 +482,9 @@ export class GeminiVoiceBrain {
       turnId: params.turnId,
       eagerId: params.eagerId,
       cancelled: false,
+      wireStopped: false,
+      firstSent: false,
+      unsentTail: "",
       commitGate: gate,
       stagedHistory: [],
     };
@@ -313,28 +494,40 @@ export class GeminiVoiceBrain {
     if (params.callerText !== null) {
       workingContents.push({ role: "user", parts: [{ text: params.callerText }] });
     }
-    const forTarget = params.eagerId ?? (params.turnId || undefined);
 
-    void this.executeHops(rt, run, workingContents, forTarget);
+    void this.executeHops(rt, run, workingContents);
   }
 
   private async executeHops(
     rt: FishRealtimeClient,
     run: InFlightRun,
     workingContents: Content[],
-    forTarget: string | undefined,
   ): Promise<void> {
-    let firstSent = false;
     let spokenAny = false;
 
     const sendSpeech = (text: string, opts?: { flush?: boolean; last?: boolean }) => {
+      if (run.cancelled || !rt.isLive) return;
+      if (run.wireStopped) {
+        if (text) {
+          run.unsentTail += text;
+          if (this.recoverableCut?.sourceRun === run) {
+            this.recoverableCut.text = joinSpokenChunks(this.recoverableCut.text, text);
+          }
+        }
+        return;
+      }
       if (text) spokenAny = true;
+
+      // Only pass `for: eager_id` while speculative; once committed, omit `for` so Fish says it immediately
+      const effectiveForId =
+        !run.firstSent && !run.commitGate.isOpen ? (run.eagerId ?? undefined) : undefined;
+
       rt.replyText(run.replyId, text, {
-        forId: !firstSent ? forTarget : undefined,
+        forId: effectiveForId,
         flush: opts?.flush,
         last: opts?.last,
       });
-      firstSent = true;
+      run.firstSent = true;
     };
 
     try {
@@ -357,7 +550,7 @@ export class GeminiVoiceBrain {
           model: this.model,
           tier: this.tier,
           mode: run.eagerId ? "eager" : "committed",
-          for: forTarget ?? null,
+          for: run.eagerId ?? (run.turnId || null),
         });
 
         const stream = await ai.models.generateContentStream({
@@ -368,7 +561,7 @@ export class GeminiVoiceBrain {
             tools: [getGeminiTools()],
             temperature: 0.4,
             maxOutputTokens: 700,
-            thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
+            thinkingConfig: getThinkingConfig(this.model),
           },
         });
 
@@ -500,6 +693,13 @@ export class GeminiVoiceBrain {
           reply_id: run.replyId,
           error: err instanceof Error ? err.message : String(err),
         });
+      }
+    } finally {
+      if (this.recoverableCut?.sourceRun === run) {
+        this.recoverableCut.sourceRun = null;
+      }
+      if (this.active === run) {
+        this.active = null;
       }
     }
   }

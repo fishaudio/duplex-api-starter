@@ -59,7 +59,7 @@ export function useAudioRig() {
     };
   }, [refreshDevices]);
 
-  // Route playbackNode either directly to ctx.destination ("default") or via HTMLAudioElement.setSinkId
+  // Route playbackNode through <audio> even on "default" so Chrome's WebRTC AEC receives the playback reference signal
   const applySpeakerRouting = useCallback(async (sinkId: string) => {
     const ctx = ctxRef.current;
     const playbackNode = playbackNodeRef.current;
@@ -77,11 +77,6 @@ export function useAudioRig() {
       audioElRef.current = null;
     }
 
-    if (!sinkId || sinkId === "default") {
-      playbackNode.connect(ctx.destination);
-      return;
-    }
-
     const mediaDest = mediaDestRef.current ?? ctx.createMediaStreamDestination();
     mediaDestRef.current = mediaDest;
     playbackNode.connect(mediaDest);
@@ -92,11 +87,22 @@ export function useAudioRig() {
     audioEl.setAttribute("playsinline", "true");
     document.body.appendChild(audioEl);
     audioEl.srcObject = mediaDest.stream;
-    if ("setSinkId" in audioEl && typeof audioEl.setSinkId === "function") {
+    if (
+      sinkId &&
+      sinkId !== "default" &&
+      "setSinkId" in audioEl &&
+      typeof audioEl.setSinkId === "function"
+    ) {
       await audioEl.setSinkId(sinkId);
     }
-    await audioEl.play();
-    audioElRef.current = audioEl;
+    try {
+      await audioEl.play();
+      audioElRef.current = audioEl;
+    } catch {
+      audioEl.srcObject = null;
+      audioEl.remove();
+      playbackNode.connect(ctx.destination);
+    }
   }, []);
 
   const openMicIntoCapture = useCallback(
@@ -196,7 +202,7 @@ export function useAudioRig() {
       void ctx.resume();
       ctxRef.current = ctx;
 
-      await ctx.audioWorklet.addModule("/audio-worklets.js?v=2");
+      await ctx.audioWorklet.addModule("/audio-worklets.js?v=3");
 
       // Zero-gain sink connected to ctx.destination keeps captureNode & playbackNode pulled by WebAudio!
       const zeroGain = ctx.createGain();

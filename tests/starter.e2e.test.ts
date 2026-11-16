@@ -33,6 +33,156 @@ describe("Full-Stack TypeScript Realtime Agent Starter", () => {
     expect(peak).toBeGreaterThan(0);
   });
 
+  it("executes all 8 Drive-Thru POS tools accurately (lookup, add, update, remove, get, confirm, cancel, end_call)", () => {
+    const pos = new DriveThruOrderState();
+
+    const menu = pos.executeTool("lookup_menu", { query: "Big Mac" });
+    expect(menu.ok).toBe(true);
+    expect((menu.items as Array<{ name: string }>).some((i) => i.name === "Big Mac")).toBe(true);
+
+    const added = pos.executeTool("add_item", {
+      item: "Big Mac",
+      qty: 1,
+      size: "large",
+      meal: true,
+      drink: "Sprite",
+      modifiers: ["no pickles"],
+    });
+    expect(added.ok).toBe(true);
+    expect(pos.lines).toHaveLength(1);
+    expect(pos.lines[0].meal).toBe(true);
+    expect(pos.lines[0].modifiers).toEqual(["no pickles"]);
+
+    const added2 = pos.executeTool("add_item", { item: "French Fries", size: "small" });
+    expect(added2.ok).toBe(true);
+    expect(pos.lines).toHaveLength(2);
+
+    const updated = pos.executeTool("update_item", { line: 1, qty: 2, drink: "Coca-Cola" });
+    expect(updated.ok).toBe(true);
+    expect(pos.lines[0].qty).toBe(2);
+    expect(pos.lines[0].drink).toBe("Coca-Cola");
+
+    const removed = pos.executeTool("remove_item", { line: 2 });
+    expect(removed.ok).toBe(true);
+    expect(pos.lines).toHaveLength(1);
+
+    const got = pos.executeTool("get_order", {});
+    expect(got.ok).toBe(true);
+    expect((got.order as { total: number }).total).toBeGreaterThan(0);
+
+    const confirmed = pos.executeTool("confirm_order", {});
+    expect(confirmed.ok).toBe(true);
+    expect(pos.status).toBe("confirmed");
+
+    const hangup = pos.executeTool("end_call", { reason: "order_confirmed" });
+    expect(hangup.ok).toBe(true);
+    expect(hangup.ending_call).toBe(true);
+
+    const cancelled = pos.executeTool("cancel_order", {});
+    expect(cancelled.ok).toBe(true);
+    expect(pos.lines).toHaveLength(0);
+    expect(pos.status).toBe("cancelled");
+  });
+
+  it("never cancels a committed reply on kind='aside' and recovers unspoken remainder on turn.dropped / partial", async () => {
+    const sentFrames: Array<Record<string, unknown>> = [];
+    const cancelledIds: string[] = [];
+    const hangups: string[] = [];
+    const fakeRt = {
+      isLive: true,
+      replyText(replyId: string, text: string, opts?: { forId?: string; flush?: boolean; last?: boolean }) {
+        sentFrames.push({ replyId, text, ...opts });
+      },
+      replyCancel(replyId: string) {
+        cancelledIds.push(replyId);
+      },
+    } as unknown as FishRealtimeClient;
+
+    const brain = new GeminiVoiceBrain({
+      credentialsPath: "",
+      orderState: new DriveThruOrderState(),
+      onHangupRequested: (reason) => {
+        hangups.push(reason);
+      },
+    });
+
+    // 1. Committed reply interrupted by echo (`by: "caller"`), then `kind: "aside"` arrives:
+    //    aside must NOT cancel anything, and must trigger cut recovery for the interrupted reply!
+    await brain.handleRealtimeEvent(
+      {
+        type: "reply.done",
+        reply_id: "r-echo-1",
+        status: "interrupted",
+        by: "caller",
+        heard_text: "I do,",
+        unheard_text: "but I am here to help with your order.",
+      },
+      fakeRt,
+    );
+    await brain.handleRealtimeEvent(
+      { type: "turn.committed", turn_id: "t_aside", text: "Hey pass me my wallet", kind: "aside" },
+      fakeRt,
+    );
+    expect(cancelledIds).toHaveLength(0);
+    expect(sentFrames.some((f) => String(f.text).includes("but I am here to help with your order."))).toBe(true);
+
+    // 2. Caller barge-in followed by `turn.dropped` (reason="echo") -> automatically resumes remainder!
+    sentFrames.length = 0;
+    await brain.handleRealtimeEvent(
+      {
+        type: "reply.done",
+        reply_id: "r-echo-2",
+        status: "interrupted",
+        by: "caller",
+        heard_text: "Sure,",
+        unheard_text: "what can I get started for you today?",
+      },
+      fakeRt,
+    );
+    await brain.handleRealtimeEvent({ type: "turn.dropped", reason: "echo" }, fakeRt);
+    expect(sentFrames).toHaveLength(1);
+    expect(sentFrames[0].text).toBe("what can I get started for you today?");
+    expect(sentFrames[0].last).toBe(true);
+    expect(sentFrames[0].forId).toBeUndefined();
+
+    // 3. `partial` reply receipt immediately re-sends unheard remainder once
+    sentFrames.length = 0;
+    await brain.handleRealtimeEvent(
+      {
+        type: "reply.done",
+        reply_id: "r-part-1",
+        status: "partial",
+        reason: "stopped_early",
+        heard_text: "Your total is",
+        unheard_text: "$12.50.",
+      },
+      fakeRt,
+    );
+    expect(sentFrames).toHaveLength(1);
+    expect(sentFrames[0].text).toBe("$12.50.");
+    expect(sentFrames[0].last).toBe(true);
+
+    // 4. `end_call` waits for `reply.done` (status="completed") + ~500ms playout before hanging up,
+    //    and does NOT hang up if interrupted.
+    (brain as unknown as { pendingHangup: { replyId: string; reason: string } | null }).pendingHangup = {
+      replyId: "r-bye-1",
+      reason: "order_confirmed",
+    };
+    await brain.handleRealtimeEvent(
+      {
+        type: "reply.done",
+        reply_id: "r-bye-1",
+        status: "completed",
+        heard_text: "Please pull forward, bye-bye!",
+        unheard_text: "",
+      },
+      fakeRt,
+    );
+    expect(hangups).toHaveLength(0);
+    await new Promise((r) => setTimeout(r, 600));
+    expect(hangups).toEqual(["order_confirmed"]);
+  });
+
   it(
     "gates mutating Drive-Thru tools on turn.eager until turn.committed approves",
     async () => {
@@ -57,7 +207,7 @@ describe("Full-Stack TypeScript Realtime Agent Starter", () => {
 
       const brain = new GeminiVoiceBrain({
         credentialsPath: config.vertex_ai.credentials_path,
-        model: "gemini-3.5-flash-lite",
+        model: "gemini-3.8-flash",
         tier: "priority",
         orderState,
         onEvent: (_ch, payload) => {
@@ -108,7 +258,10 @@ describe("Full-Stack TypeScript Realtime Agent Starter", () => {
 
       for (let i = 0; i < 80; i++) {
         await new Promise((r) => setTimeout(r, 100));
-        if (orderState.lines.length > 0 && sentFrames.some((f) => f.last === true && !cancelledIds.includes(String(f.replyId)))) {
+        if (
+          orderState.lines.length > 0 &&
+          sentFrames.some((f) => f.last === true && !cancelledIds.includes(String(f.replyId)))
+        ) {
           break;
         }
       }
@@ -130,11 +283,11 @@ describe("Full-Stack TypeScript Realtime Agent Starter", () => {
       const port = (srv.address() as AddressInfo).port;
 
       try {
-        // Verify /api/gemini-ping Priority tier
+        // Verify /api/gemini-ping Priority tier with default gemini-3.8-flash
         const pingResp = await fetch(`http://127.0.0.1:${port}/api/gemini-ping`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ model: "gemini-3.5-flash-lite", tier: "priority" }),
+          body: JSON.stringify({ model: "gemini-3.8-flash", tier: "priority" }),
         });
         const pingJson = (await pingResp.json()) as Record<string, unknown>;
         expect(pingJson.ok).toBe(true);

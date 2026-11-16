@@ -41,8 +41,8 @@ Open **http://localhost:5173** (or run `npm run build && npm start` for single-p
 | **Binary MessagePack + 20 ms Audio Clock** | `src/server/fishRealtime.ts` | Immediate `session.start`, `session.started` gating, and a 20 ms `pcm_s16le` pump that pads silence so calls never drift or hit `4408 idle_timeout`. Supports both `Bearer` and `Basic` auth. |
 | **Zero-Dead-Air Tool Speech (`say` + `flush`)** | `src/server/brain.ts` + `src/server/driveThru.ts` | Flushes a short spoken filler (`"Got it, adding that now."`, `flush: true`) before running tools, then streams Hop 2 on the same `reply_id`. |
 | **Backend Ambience + Speech Ducker** | `src/server/ambience.ts` | Pure-WASM MP3 decode (`mpg123-decoder`) + seamless 72 s drive-thru loop mixed on the **backend** into outbound PCM with `-10 dB` sidechain ducking when the agent speaks. |
-| **Barge-In `heard_text` Alignment** | `src/server/brain.ts` + `public/audio-worklets.js` | Fades browser speaker playback over 80 ms on `reply.interrupted` and records **only** `reply.done.heard_text` into LLM history. |
-| **Vertex AI Gemini Priority Tier** | `src/server/brain.ts` | Switches live between `priority` (`ON_DEMAND_PRIORITY` via `X-Vertex-AI-LLM-Shared-Request-Type: priority`) and `normal` (`ON_DEMAND`), using `ThinkingLevel.LOW` and preserving `thoughtSignature`. |
+| **Barge-In `heard_text` Alignment & Echo Recovery** | `src/server/brain.ts` + `public/audio-worklets.js` | Fades browser speaker playback over 80 ms on `reply.interrupted`, records **only** `reply.done.heard_text` into LLM history, ignores `aside` interruptions, and automatically resumes unspoken text after `turn.dropped` false barge-ins. |
+| **Vertex AI Gemini Priority Tier** | `src/server/brain.ts` | Switches live between `priority` (`ON_DEMAND_PRIORITY` via `X-Vertex-AI-LLM-Shared-Request-Type: priority`) and `normal` (`ON_DEMAND`), using `gemini-3.8-flash` (`thinkingBudget: 64`) and preserving `thoughtSignature`. |
 
 ---
 
@@ -54,7 +54,7 @@ realtime-agent-starter/
 ├── config.example.toml         # Endpoint, Bearer/Basic auth, and Vertex AI config template
 ├── package.json                # Single unified TypeScript toolchain
 ├── public/
-│   └── audio-worklets.js       # 20 ms PCM capture + 240 ms jitter buffer + 80 ms barge-in fade
+│   └── audio-worklets.js       # 20 ms PCM capture + 300 ms jitter buffer + 80 ms barge-in fade
 ├── assets/
 │   ├── drive_thru.mp3          # CC0 1.0 kitchen + drive-thru lane ambience loop
 │   └── SOURCES.md              # CC0 1.0 attributions
@@ -68,7 +68,7 @@ realtime-agent-starter/
     │   ├── ambience.ts         # Backend WASM MP3 ambience mixer + -10 dB speech ducker
     │   ├── brain.ts            # Eager-first Gemini orchestrator + commit-gated tools
     │   ├── prompts.ts          # Dynamic spoken prompt builder from session.started.text_rules
-    │   └── driveThru.ts        # McDonald's menu, POS state, & 7 tool schemas (swap for your business!)
+│   │   └── driveThru.ts        # McDonald's menu, POS state, & 8 tool schemas (swap for your business!)
     └── client/
         ├── App.tsx             # POS board, config.toml modal, controls, and live Event Inspector
         ├── useAudioRig.ts      # Mic/speaker device enumeration & WebAudio duplex hook

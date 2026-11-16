@@ -30,6 +30,7 @@ export interface RealtimeConnectOptions {
   authHeader?: string;
   sampleRate: number;
   referenceId?: string;
+  ownSpeech?: "natural" | "quiet";
   noiseCancel?: boolean;
   backchannel?: boolean;
   interim?: boolean;
@@ -76,7 +77,7 @@ export class FishRealtimeClient {
         sample_rate: Math.trunc(this.opts.sampleRate),
         noise_cancel: this.opts.noiseCancel ?? true,
       },
-      own_speech: "natural",
+      own_speech: this.opts.ownSpeech ?? "quiet",
       playback: { delay_ms: Math.trunc(this.opts.playbackDelayMs ?? 260) },
       session_ending: true,
     };
