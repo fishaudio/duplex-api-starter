@@ -13,12 +13,19 @@ async function until(check: () => boolean, ms = 2000): Promise<void> {
   }
 }
 
-/** A brain whose Gemini answers each request with the next of `answers` ("" = no words at all). */
-function harness(answers: string[]) {
+/** A tool call Gemini makes instead of answering with words. */
+type ToolCall = { call: string; args: Record<string, unknown> };
+
+/**
+ * A brain whose Gemini answers each request with the next of `answers` ("" = no words at all), each
+ * `delayMs` after it was asked.
+ */
+function harness(answers: Array<string | ToolCall>, delayMs = 0) {
   const frames: Array<{ replyId: string; text: string; forId?: string; flush?: boolean; last?: boolean }> = [];
   const cancelledIds: string[] = [];
   const events: Array<Record<string, unknown>> = [];
   const requests: Content[][] = [];
+  const hangups: string[] = [];
   const rt = {
     isLive: true,
     replyText(replyId: string, text: string, opts?: { forId?: string; flush?: boolean; last?: boolean }) {
@@ -34,21 +41,30 @@ function harness(answers: string[]) {
     onEvent: (_channel, payload) => {
       events.push(payload);
     },
+    onHangupRequested: (reason) => {
+      hangups.push(reason);
+    },
   });
   const ai = {
     models: {
       async generateContentStream(req: { contents: Content[] }) {
         requests.push(structuredClone(req.contents));
-        const text = answers.shift() ?? "";
+        const answer = answers.shift() ?? "";
         return (async function* () {
-          if (text) yield { candidates: [{ content: { role: "model", parts: [{ text }] } }] };
+          if (delayMs > 0) await wait(delayMs);
+          if (typeof answer !== "string") {
+            const part = { functionCall: { name: answer.call, args: answer.args } };
+            yield { candidates: [{ content: { role: "model", parts: [part] } }] };
+          } else if (answer) {
+            yield { candidates: [{ content: { role: "model", parts: [{ text: answer }] } }] };
+          }
         })();
       },
     },
   };
   (brain as unknown as { buildClient: () => unknown }).buildClient = () => ({ ai, projectId: "test" });
   const send = (event: Record<string, unknown>) => brain.handleRealtimeEvent(event, rt);
-  return { brain, frames, cancelledIds, events, requests, send };
+  return { brain, frames, cancelledIds, events, requests, hangups, send };
 }
 
 const userSaid = (text: string): Content => ({ role: "user", parts: [{ text }] });
@@ -123,6 +139,104 @@ describe("asides said over a reply", () => {
     expect(contents.slice(-2)).toEqual([userSaid("No pickles on that."), userSaid("And a large cola.")]);
     await wait(300);
     expect(h.requests).toHaveLength(1);
+    h.brain.resetCall();
+  });
+});
+
+describe("held asides around a stopped reply, an eager and a hangup", () => {
+  it("waits for the reply.done of a reply a caller sound stopped, even when the sound is dropped first", async () => {
+    const h = harness(["Sure, a cola too."]);
+    await h.send({ type: "session.started", session_id: "s", text_rules: {} });
+    await h.send({ type: "reply.started", reply_id: "r-welcome", at_ms: 400 });
+    await h.send({ type: "turn.committed", turn_id: "t1", text: "Can I get a cola too?", kind: "aside" });
+    await h.send({ type: "reply.interrupted", reply_id: "r-welcome", by: "caller", heard_text: "Welcome!", final: false });
+    await h.send({ type: "turn.dropped", turn_id: "t2", reason: "echo" });
+
+    // What the guest heard of the welcome is not known yet: Gemini is not asked.
+    await wait(400);
+    expect(h.requests).toHaveLength(0);
+
+    await h.send({
+      type: "reply.done",
+      reply_id: "r-welcome",
+      status: "interrupted",
+      by: "caller",
+      heard_text: "Welcome!",
+      unheard_text: "What can I get started for you today?",
+    });
+    await until(() => h.requests.length === 1);
+    expect(h.requests[0].slice(-3)).toEqual([
+      agentSaid("Welcome!"),
+      userSaid("[Speaker note: guest interrupted before hearing: What can I get started for you today?]"),
+      userSaid("Can I get a cola too?"),
+    ]);
+    h.brain.resetCall();
+  });
+
+  it("puts held words before the words of an eager, and its approved turn keeps them; a wordless aside is a note", async () => {
+    const h = harness(["One large cola, coming up."], 200);
+    await h.send({ type: "session.started", session_id: "s", text_rules: {} });
+    await h.send({ type: "reply.started", reply_id: "r-welcome", at_ms: 400 });
+    await h.send({ type: "turn.committed", turn_id: "t0", text: "...", kind: "aside" });
+    await h.send({ type: "turn.committed", turn_id: "t1", text: "Is the cola diet?", kind: "aside" });
+    expect(h.events.filter((e) => e.type === "llm.aside_held").map((e) => e.text)).toEqual(["Is the cola diet?"]);
+
+    await h.send({ type: "turn.eager", turn_id: "t2", eager_id: "e1", text: "A large cola please." });
+    await until(() => h.requests.length === 1);
+    expect(h.requests[0].slice(-2)).toEqual([userSaid("Is the cola diet?"), userSaid("A large cola please.")]);
+
+    await h.send({ type: "turn.committed", turn_id: "t2", text: "A large cola please.", kind: "turn", approved_eager_id: "e1" });
+    await until(() => h.frames.some((f) => f.last && f.replyId !== "r-welcome"));
+    expect(h.events.some((e) => e.type === "llm.eager_approved")).toBe(true);
+    const history = (h.brain as unknown as { history: Content[] }).history;
+    expect(history).toContainEqual(userSaid("[Guest spoke to passenger: ...]"));
+    expect(history.slice(-2)).toEqual([userSaid("Is the cola diet?"), userSaid("A large cola please.")]);
+
+    await h.send({ type: "reply.done", reply_id: "r-welcome", status: "replaced", by: "replaced", heard_text: "Welcome!", unheard_text: "" });
+    await wait(300);
+    expect(h.requests).toHaveLength(1);
+    h.brain.resetCall();
+  });
+
+  it("hangs up after an end_call that says no words, once no reply is being said", async () => {
+    const h = harness([{ call: "end_call", args: { reason: "guest_goodbye" } }, ""]);
+    await h.send({ type: "session.started", session_id: "s", text_rules: {} });
+    await h.send({ type: "reply.started", reply_id: "r-welcome", at_ms: 400 });
+    // The guest's goodbye commits while the welcome is still being said: the hangup waits for it.
+    await h.send({ type: "turn.committed", turn_id: "t1", text: "Bye!", kind: "turn" });
+    await until(() => h.events.some((e) => e.type === "llm.no_reply"));
+    await wait(700);
+    expect(h.hangups).toEqual([]);
+    expect(h.frames.map((f) => f.replyId)).toEqual(["r-welcome"]);
+
+    await h.send({ type: "reply.done", reply_id: "r-welcome", status: "completed", heard_text: "Welcome!", unheard_text: "" });
+    await until(() => h.hangups.length === 1);
+    expect(h.hangups).toEqual(["guest_goodbye"]);
+    h.brain.resetCall();
+
+    // Nothing being said: the call closes ~500 ms after the empty answer.
+    const g = harness([{ call: "end_call", args: { reason: "guest_goodbye" } }, ""]);
+    await g.send({ type: "turn.committed", turn_id: "t1", text: "Bye!", kind: "turn" });
+    await until(() => g.hangups.length === 1, 1500);
+    expect(g.hangups).toEqual(["guest_goodbye"]);
+    expect(g.frames).toEqual([]);
+    g.brain.resetCall();
+  });
+
+  it("does not answer words held over the farewell: the call ends and they stay in the history", async () => {
+    const farewell = "Thank you, bye-bye!";
+    const h = harness([{ call: "end_call", args: { reason: "order_confirmed", say: farewell } }, ""]);
+    await h.send({ type: "turn.committed", turn_id: "t1", text: "That's all, thanks.", kind: "turn" });
+    await until(() => h.frames.some((f) => f.last));
+    const replyId = h.frames[0].replyId;
+    await h.send({ type: "reply.started", reply_id: replyId, at_ms: 9000 });
+    await h.send({ type: "turn.committed", turn_id: "t2", text: "Did they put the napkins in?", kind: "aside" });
+    await h.send({ type: "reply.done", reply_id: replyId, status: "completed", heard_text: farewell, unheard_text: "" });
+
+    await until(() => h.hangups.length === 1);
+    expect(h.hangups).toEqual(["order_confirmed"]);
+    expect(h.requests).toHaveLength(2);
+    expect(h.events.some((e) => e.type === "llm.aside_unanswered")).toBe(true);
     h.brain.resetCall();
   });
 });

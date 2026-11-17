@@ -9,9 +9,9 @@
  * guest heard, and its answer would replace the reply being said. The prompt lets Gemini answer with
  * nothing when the words were not meant for the agent. The Fish agent platform does the same.
  *
- * The words wait until no reply is in flight and the caller has gone quiet with nothing of theirs left
- * to commit. A caller turn committed meanwhile takes them (`take`): they are answered with that turn,
- * not on their own.
+ * The words wait until no reply is in flight, the `reply.done` of a reply that was stopped has come,
+ * and the caller has gone quiet with nothing of theirs left to commit. A caller turn committed
+ * meanwhile takes them (`take`): they are answered with that turn, not on their own.
  */
 
 /** How often the wait is checked. */
@@ -24,7 +24,10 @@ const POLL_MS = 100;
 const CALLER_COMMIT_WAIT_MS = 1500;
 
 export interface HeldAsidesOptions {
-  /** A reply of ours is being said or written: the held words wait for it to end. */
+  /**
+   * A reply of ours is being said or written, or one was stopped and its `reply.done` (what the guest
+   * heard of it) is still to come: the held words wait, so that they go after what was heard.
+   */
   replyInFlight(): boolean;
   /** Nothing is in the way any more: the held words go to Gemini as one guest message. */
   release(text: string): void;

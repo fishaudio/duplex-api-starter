@@ -29,6 +29,11 @@ import type { FishRealtimeClient } from "./fishRealtime.ts";
 import { HeldAsides } from "./heldAsides.ts";
 import { buildDriveThruPrompt } from "./prompts.ts";
 
+/** An aside is held over a reply only when it has a word in it, not a lone sound or punctuation. */
+const HAS_WORDS = /[\p{L}\p{N}]/u;
+/** How long the `reply.done` of a stopped reply is waited for: it comes at most ~2 s after the stop. */
+const RECEIPT_WAIT_MS = 3000;
+
 export const GEMINI_MODELS: GeminiModelOption[] = [
   { id: "gemini-3.8-flash", label: "Gemini 3.8 Flash (Recommended)" },
   { id: "gemini-3.5-flash-lite", label: "Gemini 3.5 Flash-Lite" },
@@ -120,9 +125,13 @@ export class GeminiVoiceBrain {
   private partialRetriedReplies = new Set<string>();
   /** Replies the caller hears or is about to: sent to be said at once, or started, and not yet stopped or done. */
   private liveReplies = new Set<string>();
+  /** Replies stopped (`reply.interrupted`) whose `reply.done` has not come yet, with when they stopped. */
+  private stoppedReplies = new Map<string, number>();
+  /** The farewell is over and the call closes in ~500 ms. */
+  private hangingUp = false;
   private rt: FishRealtimeClient | null = null;
   private readonly heldAsides = new HeldAsides({
-    replyInFlight: () => this.rt?.isLive === true && this.replyInFlight(),
+    replyInFlight: () => this.rt?.isLive === true && (this.replyInFlight() || this.receiptAwaited()),
     release: (text) => this.releaseHeldAsides(text),
   });
 
@@ -178,6 +187,8 @@ export class GeminiVoiceBrain {
     this.recoverableCut = null;
     this.partialRetriedReplies.clear();
     this.liveReplies.clear();
+    this.stoppedReplies.clear();
+    this.hangingUp = false;
     this.heldAsides.clear();
     this.rt = null;
     if (this.active) {
@@ -255,6 +266,7 @@ export class GeminiVoiceBrain {
     if (etype === "reply.interrupted") {
       const replyId = String(event.reply_id ?? "");
       this.liveReplies.delete(replyId);
+      if (!this.stoppedReplies.has(replyId)) this.stoppedReplies.set(replyId, Date.now());
       // A sound of the caller's stopped it: their commit or drop is still to come.
       if (event.by === "caller") this.heldAsides.onCallerHeard();
       if (this.active && this.active.replyId === replyId) {
@@ -305,7 +317,7 @@ export class GeminiVoiceBrain {
         if (this.active && !this.active.commitGate.isOpen) {
           this.cancelActive(rt, !this.active.wireStopped);
         }
-        if (overReply || this.heldAsides.pending) {
+        if ((overReply || this.heldAsides.pending) && HAS_WORDS.test(text)) {
           // Said over a reply: it can be the guest talking over the agent. Hold it until the reply
           // ends, then Gemini gets it as the guest's words (behind words held before it, in order).
           this.heldAsides.hold(text);
@@ -359,6 +371,7 @@ export class GeminiVoiceBrain {
       const status = String(event.status ?? "");
       const by = event.by ? String(event.by) : "";
       this.liveReplies.delete(replyId);
+      this.stoppedReplies.delete(replyId);
 
       if (heard) {
         this.history.push({ role: "model", parts: [{ text: heard }] });
@@ -418,11 +431,7 @@ export class GeminiVoiceBrain {
       }
 
       if (hangupForThisReply && status !== "interrupted") {
-        setTimeout(() => {
-          if (rt.isLive && this.onHangupRequested) {
-            void this.onHangupRequested(hangupForThisReply.reason);
-          }
-        }, 500);
+        this.scheduleHangup(rt, hangupForThisReply.reason);
       }
       return;
     }
@@ -506,10 +515,60 @@ export class GeminiVoiceBrain {
     return writing || this.liveReplies.size > 0;
   }
 
+  /** A reply of ours was stopped and its `reply.done`, which says what the guest heard, is still to come. */
+  private receiptAwaited(): boolean {
+    const now = Date.now();
+    for (const [replyId, stoppedAt] of this.stoppedReplies) {
+      if (now - stoppedAt < RECEIPT_WAIT_MS) return true;
+      this.stoppedReplies.delete(replyId);
+    }
+    return false;
+  }
+
+  /**
+   * The call is ending: the line closes in a moment, or a farewell cut by a sound of the caller's waits
+   * to be resumed. (A farewell still being written or said is a reply in flight.)
+   */
+  private hangupPending(): boolean {
+    return this.hangingUp || Boolean(this.recoverableCut?.hangupReason);
+  }
+
+  /** Graceful hangup: close once ~500 ms of jitter-buffer playout of the farewell has gone by. */
+  private scheduleHangup(rt: FishRealtimeClient, reason: string): void {
+    this.hangingUp = true;
+    setTimeout(() => {
+      if (rt.isLive && this.onHangupRequested) {
+        void this.onHangupRequested(reason);
+      }
+    }, 500);
+  }
+
+  /**
+   * `end_call` came in a run that said no words (the farewell was said before): no `reply.done` of the
+   * run will close the call, so it closes after the reply still being said, or now.
+   */
+  private hangUpWithoutReply(rt: FishRealtimeClient, replyId: string): void {
+    const hangup = this.pendingHangup;
+    if (!hangup || hangup.replyId !== replyId) return;
+    const beingSaid = [...this.liveReplies].at(-1);
+    if (beingSaid) {
+      this.pendingHangup = { replyId: beingSaid, reason: hangup.reason };
+      return;
+    }
+    this.pendingHangup = null;
+    this.scheduleHangup(rt, hangup.reason);
+  }
+
   /** The reply the held asides were said over has ended: Gemini gets them as the guest's words, after it. */
   private releaseHeldAsides(text: string): void {
     const rt = this.rt;
     if (!rt?.isLive) return;
+    if (this.hangupPending()) {
+      // The call is ending: an answer would be cut off by the hangup. The words stay in the history.
+      this.history.push({ role: "user", parts: [{ text }] });
+      void this.emit("LLM->", { type: "llm.aside_unanswered", reason: "hangup", text });
+      return;
+    }
     // Gemini answers the words, told by the speaker note what the guest did not hear: no cut is resumed on its own.
     this.recoverableCut = null;
     this.history.push({ role: "user", parts: [{ text }] });
@@ -584,8 +643,12 @@ export class GeminiVoiceBrain {
       }
       if (text) spokenAny = true;
       if (!text && !run.firstSent) {
-        // Gemini answered with nothing (words not meant for the agent): no reply is started.
-        if (opts?.last) void this.emit("LLM->", { type: "llm.no_reply", reply_id: run.replyId });
+        // Gemini answered with nothing (words not meant for the agent, or a farewell said before
+        // `end_call`): no reply is started.
+        if (opts?.last) {
+          void this.emit("LLM->", { type: "llm.no_reply", reply_id: run.replyId });
+          this.hangUpWithoutReply(rt, run.replyId);
+        }
         return;
       }
 
