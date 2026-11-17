@@ -129,6 +129,7 @@ export class GeminiVoiceBrain {
   private stoppedReplies = new Map<string, number>();
   /** The farewell is over and the call closes in ~500 ms. */
   private hangingUp = false;
+  private hangupTimer: ReturnType<typeof setTimeout> | undefined;
   private rt: FishRealtimeClient | null = null;
   private readonly heldAsides = new HeldAsides({
     replyInFlight: () => this.rt?.isLive === true && (this.replyInFlight() || this.receiptAwaited()),
@@ -189,6 +190,8 @@ export class GeminiVoiceBrain {
     this.liveReplies.clear();
     this.stoppedReplies.clear();
     this.hangingUp = false;
+    clearTimeout(this.hangupTimer);
+    this.hangupTimer = undefined;
     this.heldAsides.clear();
     this.rt = null;
     if (this.active) {
@@ -338,6 +341,8 @@ export class GeminiVoiceBrain {
 
       // Real caller turn -> discard any pending cut-recovery from the prior turn
       this.recoverableCut = null;
+      // The guest kept talking after a goodbye: a hangup still waiting on a reply would cut the answer.
+      if (this.pendingHangup) this.dropHangup(this.pendingHangup, "caller_turn");
       // Asides held over a reply go right before the turn that takes them, with no request of their own.
       const held = this.heldAsides.take();
       if (held) this.history.push({ role: "user", parts: [{ text: held }] });
@@ -430,7 +435,10 @@ export class GeminiVoiceBrain {
         return;
       }
 
-      if (hangupForThisReply && status !== "interrupted") {
+      if (hangupForThisReply && status === "replaced") {
+        // A newer reply of ours took its place: the guest kept talking, and the call closing now would cut it.
+        this.dropHangup(hangupForThisReply, "replaced");
+      } else if (hangupForThisReply && status !== "interrupted") {
         this.scheduleHangup(rt, hangupForThisReply.reason);
       }
       return;
@@ -533,14 +541,25 @@ export class GeminiVoiceBrain {
     return this.hangingUp || Boolean(this.recoverableCut?.hangupReason);
   }
 
-  /** Graceful hangup: close once ~500 ms of jitter-buffer playout of the farewell has gone by. */
+  /** Graceful hangup: close once ~500 ms of jitter-buffer playout of the farewell has gone by (once a call). */
   private scheduleHangup(rt: FishRealtimeClient, reason: string): void {
+    if (this.hangingUp) return;
     this.hangingUp = true;
-    setTimeout(() => {
+    this.hangupTimer = setTimeout(() => {
+      this.hangupTimer = undefined;
       if (rt.isLive && this.onHangupRequested) {
         void this.onHangupRequested(reason);
       }
     }, 500);
+  }
+
+  /**
+   * The guest kept talking after the goodbye, and the answer to them replaces the reply the hangup waits
+   * on: the hangup is dropped so that answer is not cut. Gemini calls `end_call` again if the call should end.
+   */
+  private dropHangup(hangup: { replyId: string; reason: string }, why: "caller_turn" | "replaced"): void {
+    if (this.pendingHangup === hangup) this.pendingHangup = null;
+    void this.emit("LLM->", { type: "llm.hangup_dropped", reply_id: hangup.replyId, reason: hangup.reason, why });
   }
 
   /**

@@ -83,7 +83,7 @@ The menu and prices are sample data. Order confirmation updates demo state; it d
 
 Fish commits what the caller says in one of two kinds. A **turn** is said to the agent, and Gemini answers it. An **aside** is speech that was not a turn at the agent, such as a guest talking to a passenger. An aside never stops the agent. If an aside arrives while the agent is speaking, it may be someone talking over the agent; this often happens with a second voice on a speakerphone. The server holds those words until the reply finishes, then passes them to Gemini as the guest's words, after what the guest heard of the reply. Gemini can answer them or stay silent if they were not meant for the agent. If the caller starts a turn first, the held words go to Gemini with that turn. When the agent is not speaking, an aside is recorded as talk to a passenger and gets no reply of its own.
 
-The server keeps the caller's audio clock running even during silence. After an interruption, conversation history uses the words the caller actually heard. The call closes after the farewell finishes playing, and words held over the farewell are not answered.
+The server keeps the caller's audio clock running even during silence. After an interruption, conversation history uses the words the caller actually heard. The call closes after the farewell finishes playing, and words held over the farewell are not answered. If the guest takes another turn before the farewell ends, the agent answers it and the call stays open until the agent ends it again.
 
 ## Customize the example
 

@@ -240,3 +240,80 @@ describe("held asides around a stopped reply, an eager and a hangup", () => {
     h.brain.resetCall();
   });
 });
+
+describe("a hangup the guest talks past", () => {
+  const goodbyeWithNoWords = (): Array<string | ToolCall> => [{ call: "end_call", args: { reason: "guest_goodbye" } }, ""];
+
+  /** The guest's goodbye commits while the welcome is said; Gemini ends the call with no words. */
+  async function goodbyeOverWelcome(h: ReturnType<typeof harness>): Promise<void> {
+    await h.send({ type: "session.started", session_id: "s", text_rules: {} });
+    await h.send({ type: "reply.started", reply_id: "r-welcome", at_ms: 400 });
+    await h.send({ type: "turn.committed", turn_id: "t1", text: "Bye!", kind: "turn" });
+    await until(() => h.events.some((e) => e.type === "llm.no_reply"));
+  }
+
+  const welcomeReplaced = { type: "reply.done", reply_id: "r-welcome", status: "replaced", by: "replaced", heard_text: "Welcome!", unheard_text: "" };
+
+  it("drops the hangup waiting on the welcome when the guest's next turn is answered over it", async () => {
+    const answer = "Sure, a large cola first.";
+    const h = harness([...goodbyeWithNoWords(), answer]);
+    await goodbyeOverWelcome(h);
+
+    // The guest keeps talking: the answer to their new turn replaces the welcome and is not cut.
+    await h.send({ type: "turn.committed", turn_id: "t2", text: "Wait, a large cola first.", kind: "turn" });
+    await until(() => h.frames.some((f) => f.last && f.replyId !== "r-welcome"));
+    const answerId = h.frames.at(-1)!.replyId;
+    await h.send(welcomeReplaced);
+    await h.send({ type: "reply.started", reply_id: answerId, at_ms: 3000 });
+    await wait(700);
+    expect(h.hangups).toEqual([]);
+    expect(h.events.some((e) => e.type === "llm.hangup_dropped")).toBe(true);
+
+    await h.send({ type: "reply.done", reply_id: answerId, status: "completed", heard_text: answer, unheard_text: "" });
+    await wait(700);
+    expect(h.hangups).toEqual([]);
+    h.brain.resetCall();
+  });
+
+  it("drops it too when the welcome ends while the answer to the guest's next turn is still being written", async () => {
+    const h = harness([...goodbyeWithNoWords(), "Sure, a large cola first."], 300);
+    await goodbyeOverWelcome(h);
+
+    await h.send({ type: "turn.committed", turn_id: "t2", text: "Wait, a large cola first.", kind: "turn" });
+    await h.send({ type: "reply.done", reply_id: "r-welcome", status: "completed", heard_text: "Welcome!", unheard_text: "" });
+    await until(() => h.frames.some((f) => f.last && f.replyId !== "r-welcome"));
+    await wait(700);
+    expect(h.hangups).toEqual([]);
+    h.brain.resetCall();
+  });
+
+  it("takes a replaced reply for no farewell, even when its receipt comes before the turn commits", async () => {
+    const h = harness([...goodbyeWithNoWords(), "Sure, a large cola first."]);
+    await goodbyeOverWelcome(h);
+
+    await h.send({ type: "turn.eager", turn_id: "t2", eager_id: "e2", text: "Wait, a large cola first." });
+    await until(() => h.frames.some((f) => f.last && f.replyId !== "r-welcome"));
+    await h.send(welcomeReplaced);
+    await h.send({ type: "turn.committed", turn_id: "t2", text: "Wait, a large cola first.", kind: "turn", approved_eager_id: "e2" });
+    await wait(700);
+    expect(h.hangups).toEqual([]);
+    h.brain.resetCall();
+  });
+
+  it("closes the call once when the guest says goodbye again as it closes", async () => {
+    const farewell = "Thank you, bye-bye!";
+    const h = harness([{ call: "end_call", args: { reason: "order_confirmed", say: farewell } }, "", ...goodbyeWithNoWords()]);
+    await h.send({ type: "turn.committed", turn_id: "t1", text: "That's all, thanks.", kind: "turn" });
+    await until(() => h.frames.some((f) => f.last));
+    const replyId = h.frames[0].replyId;
+    await h.send({ type: "reply.started", reply_id: replyId, at_ms: 9000 });
+    await h.send({ type: "reply.done", reply_id: replyId, status: "completed", heard_text: farewell, unheard_text: "" });
+
+    // The guest's own goodbye commits while the line closes: Gemini ends the call again, with no words.
+    await h.send({ type: "turn.committed", turn_id: "t2", text: "Bye!", kind: "turn" });
+    await until(() => h.events.some((e) => e.type === "llm.no_reply"));
+    await wait(700);
+    expect(h.hangups).toEqual(["order_confirmed"]);
+    h.brain.resetCall();
+  });
+});
