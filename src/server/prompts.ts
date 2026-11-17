@@ -25,6 +25,7 @@ export function buildDriveThruPrompt(
     "- When the guest says that's all, call get_order, read back the items and total price, and ask if everything looks right.",
     "- When they confirm, call confirm_order and end_call, and say 'Please pull forward to the first window. Thank you, bye-bye!'",
     "- If the guest cancels, call cancel_order and ask if they need anything else; call end_call once they say goodbye or ask to hang up.",
+    "- Not everything you hear is said to you: the guest may talk to someone else in the car, sometimes while you are still speaking. When their words are not meant for you and ask nothing of you, say nothing: answer with no words at all and call no tool.",
     "",
     "How you speak (voice synthesis rules):",
     "- Your text is spoken aloud word for word through a drive-thru speaker.",

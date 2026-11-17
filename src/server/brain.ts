@@ -14,6 +14,8 @@
  *     - `turn.committed (kind: "aside")` never cancels an already-committed active reply.
  *     - If caller barge-in / echo interrupts a reply and then resolves as `turn.dropped`
  *       (`echo`, `filler`, `nonuser`, `no_commit`) or `aside`, automatically resumes the unspoken tail.
+ *     - An `aside` said while a reply is in flight is held until the reply ends, then goes to Gemini as
+ *       the guest's words (`heldAsides.ts`); Gemini may answer with nothing, and then nothing is sent.
  *  5. Vertex AI Priority PayGo: sets `X-Vertex-AI-LLM-Shared-Request-Type: priority`, uses fast
  *     thinking budget/level, and preserves raw `Part[]` (`thoughtSignature`) across tool hops.
  */
@@ -24,6 +26,7 @@ import { GoogleGenAI, ThinkingLevel, type Content, type Part } from "@google/gen
 import type { GeminiModelOption, GeminiPingResult, OrderSnapshot, TextRules } from "../shared/types.ts";
 import { DriveThruOrderState, getGeminiTools, READ_ONLY_TOOLS } from "./driveThru.ts";
 import type { FishRealtimeClient } from "./fishRealtime.ts";
+import { HeldAsides } from "./heldAsides.ts";
 import { buildDriveThruPrompt } from "./prompts.ts";
 
 export const GEMINI_MODELS: GeminiModelOption[] = [
@@ -115,6 +118,13 @@ export class GeminiVoiceBrain {
   private pendingHangup: { replyId: string; reason: string } | null = null;
   private recoverableCut: RecoverableCut | null = null;
   private partialRetriedReplies = new Set<string>();
+  /** Replies the caller hears or is about to: sent to be said at once, or started, and not yet stopped or done. */
+  private liveReplies = new Set<string>();
+  private rt: FishRealtimeClient | null = null;
+  private readonly heldAsides = new HeldAsides({
+    replyInFlight: () => this.rt?.isLive === true && this.replyInFlight(),
+    release: (text) => this.releaseHeldAsides(text),
+  });
 
   private readonly onEvent?: (channel: string, payload: Record<string, unknown>) => void | Promise<void>;
   private readonly onOrderUpdate?: (snapshot: OrderSnapshot) => void | Promise<void>;
@@ -167,6 +177,9 @@ export class GeminiVoiceBrain {
     this.pendingHangup = null;
     this.recoverableCut = null;
     this.partialRetriedReplies.clear();
+    this.liveReplies.clear();
+    this.heldAsides.clear();
+    this.rt = null;
     if (this.active) {
       this.active.cancelled = true;
       this.active.commitGate.open();
@@ -218,17 +231,32 @@ export class GeminiVoiceBrain {
 
   public async handleRealtimeEvent(event: Record<string, unknown>, rt: FishRealtimeClient): Promise<void> {
     const etype = String(event.type ?? "");
+    this.rt = rt;
 
     if (etype === "session.started") {
       this.textRules = (event.text_rules ?? {}) as TextRules;
       rt.replyText("r-welcome", "Welcome! What can I get started for you today?", {
         last: true,
       });
+      this.liveReplies.add("r-welcome");
+      return;
+    }
+
+    if (etype === "reply.started") {
+      this.liveReplies.add(String(event.reply_id ?? ""));
+      return;
+    }
+
+    if (etype === "turn.interim") {
+      this.heldAsides.onCallerHeard();
       return;
     }
 
     if (etype === "reply.interrupted") {
       const replyId = String(event.reply_id ?? "");
+      this.liveReplies.delete(replyId);
+      // A sound of the caller's stopped it: their commit or drop is still to come.
+      if (event.by === "caller") this.heldAsides.onCallerHeard();
       if (this.active && this.active.replyId === replyId) {
         // Stop transmitting on this dead reply_id, while keeping LLM stream alive in case
         // the interruption turns out to be echo/noise (`turn.dropped`)
@@ -242,6 +270,7 @@ export class GeminiVoiceBrain {
       const turnId = String(event.turn_id ?? "");
       const text = String(event.text ?? "").trim();
       if (!text || !eagerId) return;
+      this.heldAsides.onCallerHeard();
 
       this.cancelActive(rt, Boolean(this.active && !this.active.wireStopped));
       this.launchReply(rt, { callerText: text, turnId, eagerId });
@@ -250,6 +279,7 @@ export class GeminiVoiceBrain {
 
     if (etype === "turn.resumed") {
       const eagerId = String(event.eager_id ?? "");
+      this.heldAsides.onCallerHeard();
       if (this.active && this.active.eagerId === eagerId) {
         await this.emit("LLM->", {
           type: "llm.eager_cancelled",
@@ -266,12 +296,21 @@ export class GeminiVoiceBrain {
       const text = String(event.text ?? "").trim();
       const kind = String(event.kind ?? "turn");
       const approvedEager = event.approved_eager_id ? String(event.approved_eager_id) : null;
+      this.heldAsides.onCallerDone();
       if (!text) return;
 
       if (kind === "aside") {
         // Spec: an `aside` stops nothing itself—never cancel an already-committed reply!
+        const overReply = this.replyInFlight();
         if (this.active && !this.active.commitGate.isOpen) {
           this.cancelActive(rt, !this.active.wireStopped);
+        }
+        if (overReply || this.heldAsides.pending) {
+          // Said over a reply: it can be the guest talking over the agent. Hold it until the reply
+          // ends, then Gemini gets it as the guest's words (behind words held before it, in order).
+          this.heldAsides.hold(text);
+          await this.emit("LLM->", { type: "llm.aside_held", turn_id: turnId, text });
+          return;
         }
         this.history.push({ role: "user", parts: [{ text: `[Guest spoke to passenger: ${text}]` }] });
         if (
@@ -287,6 +326,9 @@ export class GeminiVoiceBrain {
 
       // Real caller turn -> discard any pending cut-recovery from the prior turn
       this.recoverableCut = null;
+      // Asides held over a reply go right before the turn that takes them, with no request of their own.
+      const held = this.heldAsides.take();
+      if (held) this.history.push({ role: "user", parts: [{ text: held }] });
       this.history.push({ role: "user", parts: [{ text }] });
 
       if (approvedEager && this.active && this.active.eagerId === approvedEager && !this.active.cancelled) {
@@ -295,6 +337,7 @@ export class GeminiVoiceBrain {
           this.active.stagedHistory = [];
         }
         this.active.commitGate.open();
+        if (this.active.firstSent) this.liveReplies.add(this.active.replyId);
         await this.emit("LLM->", {
           type: "llm.eager_approved",
           approved_eager_id: approvedEager,
@@ -315,6 +358,7 @@ export class GeminiVoiceBrain {
       const unheard = String(event.unheard_text ?? "").trim();
       const status = String(event.status ?? "");
       const by = event.by ? String(event.by) : "";
+      this.liveReplies.delete(replyId);
 
       if (heard) {
         this.history.push({ role: "model", parts: [{ text: heard }] });
@@ -353,6 +397,7 @@ export class GeminiVoiceBrain {
           this.pendingHangup = { replyId: retryId, reason: hangupForThisReply.reason };
         }
         rt.replyText(retryId, remainder, { last: true });
+        this.liveReplies.add(retryId);
         await this.emit("LLM->", {
           type: "llm.resumed_after_partial",
           reply_id: retryId,
@@ -384,6 +429,7 @@ export class GeminiVoiceBrain {
 
     if (etype === "turn.dropped") {
       const reason = String(event.reason ?? "dropped");
+      this.heldAsides.onCallerDone();
       if (
         this.recoverableCut &&
         Date.now() - this.recoverableCut.createdAt < 6000 &&
@@ -422,6 +468,7 @@ export class GeminiVoiceBrain {
 
       if (cut.text) {
         rt.replyText(newReplyId, `${cut.text} `, { last: false });
+        this.liveReplies.add(newReplyId);
       } else {
         cut.sourceRun.firstSent = false;
       }
@@ -442,6 +489,7 @@ export class GeminiVoiceBrain {
       this.pendingHangup = { replyId: newReplyId, reason: cut.hangupReason };
     }
     rt.replyText(newReplyId, cut.text, { last: true });
+    this.liveReplies.add(newReplyId);
     await this.emit("LLM->", {
       type: "llm.resumed_after_false_barge",
       reply_id: newReplyId,
@@ -449,6 +497,25 @@ export class GeminiVoiceBrain {
       text: cut.text,
       streaming_continued: false,
     });
+  }
+
+  /** A reply of ours is in flight: the caller hears it or is about to, or Gemini is still writing it for a committed turn. */
+  private replyInFlight(): boolean {
+    const run = this.active;
+    const writing = run !== null && run.commitGate.isOpen && !run.cancelled && !run.wireStopped;
+    return writing || this.liveReplies.size > 0;
+  }
+
+  /** The reply the held asides were said over has ended: Gemini gets them as the guest's words, after it. */
+  private releaseHeldAsides(text: string): void {
+    const rt = this.rt;
+    if (!rt?.isLive) return;
+    // Gemini answers the words, told by the speaker note what the guest did not hear: no cut is resumed on its own.
+    this.recoverableCut = null;
+    this.history.push({ role: "user", parts: [{ text }] });
+    void this.emit("LLM->", { type: "llm.aside_released", text });
+    this.cancelActive(rt, Boolean(this.active && !this.active.wireStopped));
+    this.launchReply(rt, { callerText: null, turnId: "", eagerId: null });
   }
 
   private cancelActive(rt: FishRealtimeClient, sendCancel: boolean): void {
@@ -488,6 +555,9 @@ export class GeminiVoiceBrain {
 
     const workingContents: Content[] = [...this.history];
     if (params.callerText !== null) {
+      // Asides still held over a reply come before the words of the turn that will take them.
+      const held = this.heldAsides.peek();
+      if (held) workingContents.push({ role: "user", parts: [{ text: held }] });
       workingContents.push({ role: "user", parts: [{ text: params.callerText }] });
     }
 
@@ -513,6 +583,11 @@ export class GeminiVoiceBrain {
         return;
       }
       if (text) spokenAny = true;
+      if (!text && !run.firstSent) {
+        // Gemini answered with nothing (words not meant for the agent): no reply is started.
+        if (opts?.last) void this.emit("LLM->", { type: "llm.no_reply", reply_id: run.replyId });
+        return;
+      }
 
       // Only pass `for: eager_id` while speculative; once committed, omit `for` so Fish says it immediately
       const effectiveForId =
@@ -524,6 +599,7 @@ export class GeminiVoiceBrain {
         last: opts?.last,
       });
       run.firstSent = true;
+      if (run.commitGate.isOpen) this.liveReplies.add(run.replyId);
     };
 
     try {

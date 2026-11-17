@@ -81,6 +81,8 @@ The menu and prices are sample data. Order confirmation updates demo state; it d
 4. Menu and order lookups can run immediately. Tools that change an order wait until Fish commits the caller's turn, so an abandoned pause cannot create an order.
 5. Gemini's text is streamed to Fish for speech, and tool results update the order screen.
 
+Fish commits what the caller says in one of two kinds. A **turn** is said to the agent, and Gemini answers it. An **aside** is speech that was not a turn at the agent, such as a guest talking to a passenger. An aside never stops the agent. If an aside arrives while the agent is speaking, it may be someone talking over the agent; this often happens with a second voice on a speakerphone. The server holds those words until the reply finishes, then passes them to Gemini as the guest's words. Gemini can answer them or stay silent if they were not meant for the agent. If the caller starts a turn first, the held words go to Gemini with that turn. When the agent is not speaking, an aside is recorded as talk to a passenger and gets no reply of its own.
+
 The server keeps the caller's audio clock running even during silence. After an interruption, conversation history uses the words the caller actually heard. The call closes after the farewell finishes playing.
 
 ## Customize the example
@@ -94,6 +96,7 @@ Start with these files:
 | `src/server/prompts.ts` | The agent's role, ordering instructions, and spoken-text rules. |
 | `src/client/App.tsx` | Browser controls, order display, and event inspector. |
 | `src/server/brain.ts` | Gemini requests, tool execution, and conversation history. |
+| `src/server/heldAsides.ts` | Asides said while the agent speaks, held until its reply ends. |
 | `src/server/fishRealtime.ts` | Fish Realtime protocol and continuous audio delivery. |
 | `src/client/useAudioRig.ts` and `public/audio-worklets.js` | Browser capture, playback, and audio routing. |
 | `src/server/ambience.ts` | Background sound mixing. Attribution is in [assets/SOURCES.md](assets/SOURCES.md). |
