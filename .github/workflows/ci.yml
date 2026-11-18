@@ -18,4 +18,7 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
       - run: npm test
+      # Block on `dependencies` only (what the server and browser bundle import); dev tooling can have advisories with no fixed release, so the full audit below only reports.
+      - run: npm audit --omit=dev --audit-level=moderate
       - run: npm audit --audit-level=moderate
+        continue-on-error: true
